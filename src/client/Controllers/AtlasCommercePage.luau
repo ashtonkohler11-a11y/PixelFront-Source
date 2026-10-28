@@ -18,6 +18,8 @@ local TopBar=require(script.Parent.ShopTopBar) -- PF019 M3: the shop top bar's l
 local ShopItemArt=require(script.Parent.ShopItemArt) -- PF019 Phase C (PF - 2): living art in the card wells
 local BuyModel=require(script.Parent.ShopBuyModel) -- PF019 Cobalt buy: did the buy really go through (pure)
 local BuyFx=require(script.Parent.ShopBuyFx) -- PF019 Cobalt buy: the key's pending / success / failure looks
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- UI lock-in BUILD-OUT (PF - 4): the shared motion
+local Motion: any=if okMotion and type(UiMotion)=="table" and type((UiMotion :: any).tween)=="function" then UiMotion else nil -- (CLI loaders stub unknown modules)
 -- Catalog cards with PF - 2's living art (ShopItemArt.attach clones the one group a card needs).
 -- PF028: the Forge Territory card is the map's material (CosmeticSkinArt) like every skin, so no forge stage over it
 local ITEM_ART={vfx_aurora="effect",vfx_ember="effect"}
@@ -32,6 +34,10 @@ local function number(value: any): string
     return result
 end
 local function listens(self: any,signal: RBXScriptSignal,callback: any) table.insert(self.connections,signal:Connect(callback)) end
+-- UI audit R8 (Ashton: "Same look, bigger finger zone"): the small buy keys / arrows / sub-tabs answer on their finger zones too
+-- (HitZone.signal: the key or its PFHitZone strips; tools/atlas/author-pf3-hit-zones.luau)
+local HitZone=require(script.Parent.HitZone)
+local function tap(key: any): any return HitZone.signal(key) end
 local function ready(self: any): boolean return self.profile.loaded==true and self.profile.failed~=true and not self.model.pending end
 local function owned(self: any): any return if self.profile.loaded and type(self.profile.owned)=="table" then self.profile.owned else {} end
 -- PF019: the detail panel's buttons speak the template key language (raised dark key + rim,
@@ -84,19 +90,42 @@ end
 -- the same seat as the Icicle board; the generic swatch stays under it, hidden
 -- 2026-10-26 (Ashton dropped the Animated Nameplate pass): the Neon / Ember / Prism / Frost styles are Cobalt items, so their
 -- cards show the same plate with no pack: a dark glass plate with your name in the item's style
-local function plateArt(row: any,item: any,pack: any?)
+-- UI audit (PF - 3, R12: Neon / Ember / Prism / Frost were plain dark pills with coloured text, far under Icicle's plate): each
+-- style gets its own frame, a glass fill in its tone and a 2 px rim in its colours (fill top -> bottom, rim stops)
+local PLATE_LOOKS={
+    neon={fill={"#1a0f33","#0a0718"},rim={"#ff5fd8","#9a6bff","#4fe3ff"}},
+    ember={fill={"#3a1608","#140603"},rim={"#ffd27a","#ff8a3a","#e2401c"}},
+    prism={fill={"#18162a","#0b0a14"},rim={"#ff7a7a","#ffd36a","#7dff9e","#6bc8ff","#b47bff"}},
+    frost={fill={"#1d4a73","#0b1d33"},rim={"#f2fbff","#a9d4f2","#5f9fd6"}},
+    gold={fill={"#2e2208","#120d03"},rim={"#fff0b0","#f1c75a","#a8761a"}},
+}
+local function seq(hexes: {string}): ColorSequence
+    local keys={};for i,h in hexes do table.insert(keys,ColorSequenceKeypoint.new((i-1)/math.max(1,#hexes-1),Color3.fromHex(h))) end
+    return ColorSequence.new(keys)
+end
+local function plateArt(row: any,item: any,pack: any?): UIGradient?
     local okArt,PackArt=pcall(function() return require(Shared:FindFirstChild("CosmeticPackArt") :: any) end)
     local packArt=pack and okArt and type(PackArt)=="table" and (PackArt :: any).packs and (PackArt :: any).packs[pack.id]
     local art=row:FindFirstChild("Art",true)
-    if not art or not art:IsA("ImageLabel") then return end
+    if not art or not art:IsA("ImageLabel") then return nil end
     local image=packArt and packArt.plate
-    if not image and not item.style then return end
+    if not image and not item.style then return nil end
     local plate=Instance.new("ImageLabel");plate.Name="PFPlate";plate.BackgroundTransparency=1;plate.Image=image or ""
+    local corner=Instance.new("UICorner");corner.CornerRadius=UDim.new(.2,0)
     if not image then
-        plate.BackgroundTransparency=.1;plate.BackgroundColor3=Color3.fromHex("#0d1018")
-        local corner=Instance.new("UICorner");corner.CornerRadius=UDim.new(.2,0);corner.Parent=plate
-        local rim=Instance.new("UIStroke");rim.Color=Color3.fromHex("#3a4356");rim.Thickness=1;rim.Parent=plate
+        local look=PLATE_LOOKS[item.style] or {fill={"#141824","#0d1018"},rim={"#3a4356","#3a4356"}}
+        plate.BackgroundTransparency=0;plate.BackgroundColor3=Color3.new(1,1,1)
+        corner.Parent=plate
+        local fill=Instance.new("UIGradient");fill.Name="PFFill";fill.Rotation=90;fill.Color=seq(look.fill);fill.Parent=plate
+        local rim=Instance.new("UIStroke");rim.Color=Color3.new(1,1,1);rim.Thickness=2;rim.ApplyStrokeMode=Enum.ApplyStrokeMode.Border;rim.Parent=plate
+        local rg=Instance.new("UIGradient");rg.Name="PFRim";rg.Rotation=20;rg.Color=seq(look.rim);rg.Parent=rim
     end
+    -- the hover shimmer (BUILD-OUT): one light band crosses the plate as the card is hovered (UiMotion.sweep)
+    local shine=Instance.new("Frame");shine.Name="PFShine";shine.BackgroundColor3=Color3.new(1,1,1);shine.BorderSizePixel=0;shine.Size=UDim2.fromScale(1,1)
+    local sc=corner:Clone();sc.Parent=shine
+    local band=Instance.new("UIGradient");band.Rotation=20;band.Offset=Vector2.new(1.2,0)
+    band.Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(.4,1),NumberSequenceKeypoint.new(.5,.55),NumberSequenceKeypoint.new(.6,1),NumberSequenceKeypoint.new(1,1)})
+    band.Parent=shine
     plate.ScaleType=Enum.ScaleType.Fit;plate.ResampleMode=Enum.ResamplerMode.Pixelated;plate.AnchorPoint=Vector2.new(.5,.5)
     plate.Position=art.Position;plate.Size=art.Size;plate.ZIndex=art.ZIndex+1
     if art.AnchorPoint~=Vector2.new(.5,.5) then plate.Position=art.Position+UDim2.fromScale(art.Size.X.Scale*(.5-art.AnchorPoint.X),art.Size.Y.Scale*(.5-art.AnchorPoint.Y)) end
@@ -107,11 +136,16 @@ local function plateArt(row: any,item: any,pack: any?)
     local gradient=Instance.new("UIGradient");gradient.Name="PFStyle";gradient.Rotation=12;gradient.Parent=name
     local okStyle,Style=pcall(require,script.Parent.NameplateStyle)
     if okStyle and type(Style)=="table" and (Style :: any).apply then (Style :: any).apply(gradient,item.style or "icicle") end
+    -- (an image plate, Icicle's, has its own glass and shape: the band would cross its clear corners, so only the styled pills shine)
     name.Parent=plate;plate.Parent=art.Parent;art.Visible=false
+    if image then shine:Destroy();return nil end
+    shine.ZIndex=name.ZIndex+1;shine.Parent=plate
+    return band
 end
-local function openDaily()
+-- day: a "Day N" link opens the sheet with that day lit (UI audit R21)
+local function openDaily(day: number?)
     local ok,View=pcall(require,script.Parent.DailyView)
-    if ok and type(View)=="table" and (View :: any).openStreak then (View :: any).openStreak() end
+    if ok and type(View)=="table" and (View :: any).openStreak then (View :: any).openStreak(day) end
 end
 -- PF015 authors both pages' category tabs inside their header rows
 -- (Header.PFTabs), and the Inventory grid + identity sidebar inside one body
@@ -135,7 +169,7 @@ local SLOT_TABS={Skin={"Skins",nil},Flag={"Profile","Flag"},Crown={"Profile","Cr
     Buildings={"Buildings",nil},Missiles={"Missiles",nil}} -- PF023 P1 (PF - 1): the plate chips and Profile slots
 local SLOT_DEFAULTS={Skin="Classic"}
 local EMPTY_TITLES={All="Nothing here yet",Bundles="No bundles yet",Profile="No profile items yet",Effects="No effects yet",Buildings="No building looks yet",
-    Skins="No skins yet",Missiles="No Nuke FX yet"}
+    Skins="No skins yet",Missiles="No missile effects yet",Nameplates="No nameplates yet"}
 local STRIP_EFFECTS={vfx_aurora="aurora",vfx_ember="ember"}
 -- M2 set colours for the Cobalt tiers: cobalt, and gold for the Vault.
 local COBALT_SETS={"#7fb2ff","#7fb2ff","#8fc1ff","#a8ccff","#ffd36a"} -- Cobalt v3 (UI review 2026-10-26): lighter up the tiers
@@ -218,7 +252,7 @@ function Page.new(pageRoot: Frame,context: any): any
         for _,card in strip:GetChildren() do
             local item=Catalog.byId[card.Name];local host=hostOf(card)
             if item and item.category=="Bundle" and host:FindFirstChild("Purchase") then
-                listens(self,host.Purchase.Activated,function()self:purchaseItem(item)end)
+                listens(self,tap(host.Purchase),function()self:purchaseItem(item)end)
                 -- PF017: the shared pack-button language (shimmer, locked veil, price label).
                 local button=BundleButton.new(host,context,context.menuRoot or pageRoot.Parent)
                 if button then table.insert(self.bundleButtons,button) end
@@ -281,7 +315,7 @@ function Page.new(pageRoot: Frame,context: any): any
         for _,button in ui.Secondary:GetChildren() do
             if not button:IsA("TextButton") then continue end
             local parent,filter=string.match(button.Name,"^(%w+)_(%w+)$")
-            if parent and filter then listens(self,button.Activated,function()
+            if parent and filter then listens(self,tap(button),function()
                 if category(self,scope)~=parent then return end
                 self.filters[scope]=Commerce.validFilter(parent,filter);self.selectedId=nil
                 scrollOf(ui).CanvasPosition=Vector2.zero;self:refreshRows();self:layout()
@@ -319,14 +353,14 @@ function Page.new(pageRoot: Frame,context: any): any
                 listens(self,target.MouseLeave,function() tierHover(nil) end) -- card -> its key fires leave then enter: it settles hot
             end
         end
-        listens(self,hostOf(card).Purchase.Activated,function()
+        listens(self,tap(hostOf(card).Purchase),function()
             local item=table.clone(Catalog.currencyPacks[index]);item.category="Currency";self:purchaseItem(item)
         end)
     end
     -- Cobalt v3: the 2x Cobalt strip under the tiers buys the pass
     local x2=self.shop.Scroll.Currency:FindFirstChild("PF2xStrip")
     if x2 and Catalog.passById and Catalog.passById.pass_2x_cobalt then
-        listens(self,x2.Buy.Activated,function()self:purchaseItem(Catalog.passById.pass_2x_cobalt)end)
+        listens(self,tap(x2.Buy),function()self:purchaseItem(Catalog.passById.pass_2x_cobalt)end)
     end
     listens(self,self.shop.Scroll.Passes.Cards.Aurora.Purchase.Activated,function()self:purchaseItem(Catalog.premiumPacks[1])end)
     -- PF020 G6 (PF - 2): the authored Passes rows (author-pf020-passes): the VIP hero band and the
@@ -334,14 +368,23 @@ function Page.new(pageRoot: Frame,context: any): any
     local g6vip,g6cards=self.shop.Scroll:FindFirstChild("PFPassesVip"),self.shop.Scroll:FindFirstChild("PFPassesCards")
     if g6vip and g6cards then
         self.g6={vip=g6vip,cards=g6cards}
-        listens(self,g6vip.Band.Buy.Activated,function()self:purchaseItem(Catalog.passById.pass_vip)end)
+        listens(self,tap(g6vip.Band.Buy),function()self:purchaseItem(Catalog.passById.pass_vip)end)
+        local paired={}
         for _,card in g6cards:GetChildren() do
             local pass=Catalog.passById[card:GetAttribute("PassId")]
             if not pass then continue end
             listens(self,card.Buy.Activated,function()self:purchaseItem(pass)end)
             listens(self,card.Action.Activated,function()self:passAction(pass)end)
+            table.insert(paired,card)
+        end
+        -- BUILD-OUT (R4 pairs): while one pass card is hovered the others give way to .985 (the hot one 1.02, as PremiumController)
+        if Motion and #paired>1 then
+            local handle=Motion.pair(paired,{grow=1.02,give=.985})
+            table.insert(self.connections,{Disconnect=function() handle.Disconnect() end} :: any)
         end
     end
+    -- BUILD-OUT: the Jackpot boxes' coin tick + key sheen (Starter + 2×, every screen; JackpotMotion)
+    pcall(function() require(script.Parent.JackpotMotion).start() end)
     listens(self,self.identity.Detail.Action.Activated,function()self:equipSelected()end)
     listens(self,self.identity.Detail.Default.Activated,function()self:resetTarget(false)end)
     listens(self,self.identity.Detail.Inherit.Activated,function()self:resetTarget(true)end)
@@ -360,7 +403,7 @@ function Page.new(pageRoot: Frame,context: any): any
     return self
 end
 function Page:selectCategory(scope: string,name: string)
-    if scope=="Shop" then self.shopCategory=name else self.inventoryCategory=name;self.selectedId=nil end
+    if scope=="Shop" then self.shopCategory=name;self.enterCards=true else self.inventoryCategory=name;self.selectedId=nil end
     self.filters[scope]=Commerce.validFilter(name,nil)
     local ui=if scope=="Shop" then self.shop else self.inventory
     scrollOf(ui).CanvasPosition=Vector2.zero;ui.Secondary.CanvasPosition=Vector2.zero
@@ -406,8 +449,8 @@ function Page:setVisible(value: boolean,page: string?)
 end
 function Page:status(): string
     if self.profile.failed then return "Inventory unavailable. Return to this page to retry." end
-    if not self.profile.loaded then return "Loading your inventory…" end
-    if self.model.pending then return "Updating your inventory…" end
+    -- UX audit #8: loading / updating say nothing (the wallet reads "Loading…", a buy key shows its own dots)
+    if not self.profile.loaded or self.model.pending then return "" end
     return self.localMessage or self.model.message or ""
 end
 function Page:refreshStatus()
@@ -732,7 +775,10 @@ local PASS_OWNED={
 -- A pass's green Robux key: Roblox's live price once the pass has a real ID; "--" and disabled until then.
 local function paintPassKey(self: any,button: any,item: any)
     local canBuy,price=self:purchaseState(item)
-    button.Text=ShopItemArt.robuxText(if string.match(price,"^%d[%d,]*$") then price else "--")
+    local words=ShopItemArt.robuxText(if string.match(price,"^%d[%d,]*$") then price else "--")
+    -- PF - 3 VIP Jackpot (author-pf3-vip-jackpot): the glossy key carries its price in PFPrice, above the gloss
+    local priceLabel=button:FindFirstChild("PFPrice")
+    if priceLabel and priceLabel:IsA("TextLabel") then priceLabel.Text=words;button.Text="" else button.Text=words end
     button.Active=canBuy;button.Selectable=canBuy;button.AutoButtonColor=canBuy
     button:SetAttribute("ItemId",item.id)
 end
@@ -742,7 +788,7 @@ function Page:refreshG6()
     -- VIP: the Robux key, or "VIP active" with a tick on every perk
     local band=g6.vip.Band;local vipOwned=mine.pass_vip==true
     band.Buy.Visible=not vipOwned;band.VipActive.Visible=vipOwned
-    band.Caption.Text=if vipOwned then "Owned · thank you for supporting PixelFront" else "Yours forever · works in every match"
+    band.Caption.Text=if vipOwned then "Owned · thank you for supporting PixelFront" elseif band:GetAttribute("PF3VipJackpot") then "Works in every match" else "Yours forever · works in every match"
     band.Caption.Visible=not vipOwned -- PF025: owned, the daily Cobalt strip sits under "VIP active" (PremiumController)
     for _,cell in band.Perks:GetChildren() do local check=cell:FindFirstChild("Check");if check then check.Visible=vipOwned end end
     if not vipOwned then paintPassKey(self,band.Buy,Catalog.passById.pass_vip) end
@@ -830,10 +876,21 @@ function Page:refreshTabs(scope: string)
     end end
     if bar then bar:setActive(selected) end
     local tabs=Commerce.secondary(selected);self.filters[scope]=Commerce.validFilter(selected,self.filters[scope])
-    ui.Secondary.Visible=#tabs>0
+    -- UI audit (PF - 3, R5): in the Shop's Effects, the per-building sub-tabs showed the same 4 cards to a player who owns no
+    -- effect; until one is owned only Global shows (a building target means nothing without an effect to put on it)
+    local gated=false
+    if scope=="Shop" and selected=="Effects" then
+        local any=false;for id,v in owned(self) do local it=v and Catalog.byId[id];if it and it.category=="VFX" then any=true;break end end
+        if not any then gated=true;local g=table.find(tabs,"Global") and "Global" or tabs[1];if g then self.filters[scope]=g end end
+    end
+    ui.Secondary.Visible=#tabs>0 and not gated
     for _,button in ui.Secondary:GetChildren() do if button:IsA("TextButton") then
         local parent,filter=string.match(button.Name,"^(%w+)_(%w+)$")
-        button.Visible=parent==selected and table.find(tabs,filter)~=nil;button.Active=button.Visible;button.Selectable=button.Visible
+        button.Visible=parent==selected and table.find(tabs,filter)~=nil and not gated;button.Active=button.Visible;button.Selectable=button.Visible
+        -- UI lock-in (MM's R21 call: one name per thing): a target's sub-tab reads its CosmeticTargets label (the build dock's
+        -- names: SAM Launcher, Atom Bomb, Hydrogen Bomb), whatever words the place authored
+        local target=filter and Targets.byId[filter]
+        if target and button.Text~=target.label then button.Text=target.label end
         local active=button.Visible and filter==self.filters[scope]
         button.BackgroundColor3=if active then self.theme.Accent:Lerp(self.theme.Panel,.65) else self.theme.Panel
         button.TextColor3=if active then self.theme.Text else self.theme.MutedText
@@ -906,8 +963,8 @@ function Page:refreshRows()
                     local function move(direction: number)
                         section.Scroll.CanvasPosition=Vector2.new(math.clamp(section.Scroll.CanvasPosition.X+direction*math.max(240,section.Scroll.AbsoluteSize.X*.8),0,math.max(0,section.Scroll.AbsoluteCanvasSize.X-section.Scroll.AbsoluteWindowSize.X)),0)
                     end
-                    table.insert(self.rowConnections,section.Left.Activated:Connect(function()move(-1)end))
-                    table.insert(self.rowConnections,section.Right.Activated:Connect(function()move(1)end))
+                    table.insert(self.rowConnections,tap(section.Left):Connect(function()move(-1)end))
+                    table.insert(self.rowConnections,tap(section.Right):Connect(function()move(1)end))
                     section.Scroll.CanvasPosition=scrollPositions[sectionId] or Vector2.zero
                 end
                 parent=section.Scroll
@@ -920,7 +977,12 @@ function Page:refreshRows()
             local pack=packOf(item);local set=Color3.fromHex(CardModel.setHex(item,pack and pack.id))
             body.Title.Text=item.name;body.Kind.Text=CardModel.overline(item.category);body.Kind.TextColor3=set
             Art.bindItem(row,if Catalog.byId[item.id] then item.id else nil) -- (2026-10-26: Levels removed; a Title binds like any item)
-            local earnedPack=earnedOf(item);if item.category=="Nameplate" and (earnedPack or item.style) then plateArt(row,item,earnedPack) end
+            local earnedPack=earnedOf(item)
+            if item.category=="Nameplate" and (earnedPack or item.style) then
+                local band=plateArt(row,item,earnedPack)
+                -- BUILD-OUT: a hover sends one shimmer across the styled plate
+                if band and Motion then table.insert(self.rowConnections,row.MouseEnter:Connect(function() Motion.sweep(band,.6) end)) end
+            end
             local artNode=row:FindFirstChild("Art",true)
             if item.art and artNode and Art.bindPremium(artNode,item.art) then
                 local fallback=row:FindFirstChild("ArtFallback",true);if fallback then fallback.Visible=false end
@@ -940,7 +1002,7 @@ function Page:refreshRows()
                 table.insert(self.rowConnections,row.Activated:Connect(function()
                     self.selectedId=item.id;self:refreshSelection();self.identity.CanvasPosition=Vector2.zero
                 end))
-                table.insert(self.rowConnections,key.Activated:Connect(function()
+                table.insert(self.rowConnections,tap(key):Connect(function()
                     if key:GetAttribute("PFAction")=="equip" then self.selectedId=item.id;self:equipFromCard(item) end
                 end))
                 if self.context.cardKit then
@@ -969,11 +1031,11 @@ function Page:refreshRows()
                 row.Active=false;row.Selectable=false;row.AutoButtonColor=false
                 local action=self:bindAction(row,item,body)
                 local purchaseButton=body.Purchase
-                table.insert(self.rowConnections,purchaseButton.Activated:Connect(function()self:cardAction(item,purchaseButton)end))
+                table.insert(self.rowConnections,tap(purchaseButton):Connect(function()self:cardAction(item,purchaseButton)end))
                 local link=body:FindFirstChild("PFPackLink")
                 local earned=earnedOf(item)
-                if link then table.insert(self.rowConnections,link.Activated:Connect(function()
-                    if link.Visible and link.Active then if earned then openDaily() else self:showPack(pack) end end
+                if link then table.insert(self.rowConnections,tap(link):Connect(function()
+                    if link.Visible and link.Active then if earned then openDaily(earned.daily) else self:showPack(pack) end end
                 end)) end
                 local handle=nil
                 if self.context.cardKit then
@@ -985,7 +1047,7 @@ function Page:refreshRows()
                 self:buyLook(item,purchaseButton,row,handle) -- PF019 Cobalt buy: dots, then the verdict's play
             else
                 row.Active=false;row.Selectable=false;row.AutoButtonColor=false;self:bindPurchase(row,item)
-                table.insert(self.rowConnections,row.Purchase.Activated:Connect(function()self:purchaseItem(item)end))
+                table.insert(self.rowConnections,tap(row.Purchase):Connect(function()self:purchaseItem(item)end))
                 -- PF017: an owned item says so on its state line, with no dead button.
                 local _,ownedText,_,ownership=self:purchaseState(item)
                 if ownership=="Owned" and not item.packOnly then
@@ -996,7 +1058,7 @@ function Page:refreshRows()
                     else row.State.Text="✓ "..ownedText;row.State.TextColor3=self.theme.Positive end
                 end
                 local link=if item.packOnly then self:bindPackLink(row,item) else nil
-                if link then table.insert(self.rowConnections,link.Activated:Connect(function()if link.Active then self:showPack(packOf(item))end end)) end
+                if link then table.insert(self.rowConnections,tap(link):Connect(function()if link.Active then self:showPack(packOf(item))end end)) end
             end
             if body~=row then continue end -- the kit ring is the focus look
             local link=if inventory then nil else row:FindFirstChild("PFPackLink")
@@ -1013,23 +1075,47 @@ function Page:refreshRows()
                 local n=0;for _,c in section.Scroll:GetChildren() do if c:IsA("GuiButton") and c.Visible then n+=1 end end
                 local countLabel=section:FindFirstChild("Count",true);if countLabel then countLabel.Text=tostring(n) end
                 local fade=section:FindFirstChild("PFFade")
-                if fade then
-                    local strip=section.Scroll
-                    local function more()
-                        if fade.Parent then fade.Visible=strip.AbsoluteCanvasSize.X-strip.AbsoluteWindowSize.X-strip.CanvasPosition.X>8 end
-                    end
-                    table.insert(self.rowConnections,strip:GetPropertyChangedSignal("CanvasPosition"):Connect(more))
-                    table.insert(self.rowConnections,strip:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(more))
-                    task.defer(more)
+                local strip=section.Scroll
+                local function more()
+                    if not strip.Parent then return end
+                    local rest=strip.AbsoluteCanvasSize.X-strip.AbsoluteWindowSize.X
+                    if fade and fade.Parent then fade.Visible=rest-strip.CanvasPosition.X>8 end
+                    -- UI audit (PF - 3, 2026-10-28): a row that fits (Buildings 4, Nuke FX 4) has nothing to page, so its ‹ › hide
+                    for _,key in {section:FindFirstChild("Left"),section:FindFirstChild("Right")} do if key and key:IsA("GuiObject") then key.Visible=rest>8 end end
                 end
+                table.insert(self.rowConnections,strip:GetPropertyChangedSignal("CanvasPosition"):Connect(more))
+                table.insert(self.rowConnections,strip:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(more))
+                table.insert(self.rowConnections,strip:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(more))
+                task.defer(more)
             end
+        end
+        -- UX audit #7: "Your own image" ends the flags (Discover's Flags row, Profile › Flag, Inventory's Flag tab): the
+        -- Custom Flag pass's card in the Shop, or (owned) the Flag Forge (author-pf1-own-flag's Templates.PFOwnFlag)
+        local ownTemplate=ui.Templates:FindFirstChild("PFOwnFlag")
+        local flagParent=if discover then (self.sections.Flag and self.sections.Flag.Scroll) elseif selected=="Profile" and filter=="Flag" then grid else nil
+        -- 2026-10-28 (Ashton: "remove custom flag"): the pass is off sale, so the tile shows only for its owners (Set your image ›)
+        local ownsFlag=owned(self).pass_custom_flag==true
+        local flagOnSale=Catalog.passById~=nil and Catalog.passById.pass_custom_flag~=nil
+        if ownTemplate and flagParent and (ownsFlag or flagOnSale) and self.profile.loaded then
+            local tile=ownTemplate:Clone();tile.Name="PFOwnFlag";tile.LayoutOrder=9999;tile.Visible=true;tile.Parent=flagParent
+            self.rows[scope].PFOwnFlag=tile
+            local mine=ownsFlag
+            local label=tile:FindFirstChild("Label",true);if label then label.Text=if mine then "Set your image ›" else "Your own image ›" end
+            table.insert(self.rowConnections,tile.Activated:Connect(function()
+                if mine then
+                    local module=script.Parent:FindFirstChild("PremiumController");if module then (require(module) :: any).openFlagForge() end
+                else
+                    if inventory and self.context.navigate then self.context.navigate("Shop") end
+                    self:showPass("pass_custom_flag")
+                end
+            end))
         end
         local empty=Commerce.empty(selected,filter,inventory)
         if inventory then
             -- The header carries the owned count; this line speaks only for loading, failure and empty states.
             local countLabel=scrollOf(ui).Count
-            countLabel.Text=if self.profile.failed then "Inventory unavailable." elseif not self.profile.loaded then "Loading inventory…" elseif count==0 then empty else tostring(count).." items"
-            countLabel.Visible=self.profile.failed==true or not self.profile.loaded or count==0
+            countLabel.Text=if self.profile.failed then "Inventory unavailable." elseif count==0 then empty else tostring(count).." items"
+            countLabel.Visible=self.profile.failed==true or (self.profile.loaded and count==0) -- UX audit #8: no "Loading inventory…" line
             -- PF019: an empty category says so in one panel and points to the Shop.
             local emptyPanel=scrollOf(ui):FindFirstChild("PFEmpty")
             if emptyPanel then
@@ -1050,13 +1136,37 @@ function Page:refreshRows()
                 self.rows[scope].PFMoreTile=tile
                 table.insert(self.rowConnections,tile.Activated:Connect(function() self:visitShop() end))
             end
+            -- UI audit build-out (PF - 3, R12): a short Inventory (3 tiles or fewer, the More tile included) shows its cards
+            -- 1.5x instead of a big empty middle. A multiple of the authored cell (kept on the layout: PFBaseCell), so it is
+            -- the same share of the screen on every device.
+            local okCells,cells=pcall(function() return grid:FindFirstChildWhichIsA("UIGridLayout") end) -- (test fakes: no layout)
+            if okCells and typeof(cells)=="Instance" then
+                local base=cells:GetAttribute("PFBaseCell");if typeof(base)~="UDim2" then base=cells.CellSize;cells:SetAttribute("PFBaseCell",base) end
+                local cell: UDim2=base :: any
+                local tiles=count+(if self.rows[scope].PFMoreTile then 1 else 0)
+                local k=if count>0 and tiles<=3 then 1.5 else 1
+                cells.CellSize=UDim2.new(cell.X.Scale*k,cell.X.Offset*k,cell.Y.Scale*k,cell.Y.Offset*k)
+                -- the cell's width cap (PFCellCap) grows by the same k, or it would hold the bigger cards back
+                local cap=cells:FindFirstChild("PFCellCap")
+                if cap and cap:IsA("UISizeConstraint") then
+                    local most=cap:GetAttribute("PFBaseMax");if typeof(most)~="Vector2" then most=cap.MaxSize;cap:SetAttribute("PFBaseMax",most) end
+                    local m: Vector2=most :: any
+                    cap.MaxSize=Vector2.new(if m.X==math.huge then m.X else m.X*k,m.Y)
+                end
+            end
         else ui.Scroll.Catalog.Empty.Text=empty;ui.Scroll.Catalog.Empty.Visible=count==0 and selected~="Currency" and selected~="Bundles" and selected~="Passes" end
     end
     self.shop.Scroll.Offers.Visible=self.shopCategory=="All" or self.shopCategory=="Bundles"
     self.shop.Scroll.Currency.Visible=self.shopCategory=="All" or self.shopCategory=="Currency"
     local passesShown=Flags.passesVisible and (self.shopCategory=="All" or self.shopCategory=="Passes")
     -- PF020 G6: the authored VIP band + pass cards replace the PF015 section where they exist
-    if self.g6 then self.g6.vip.Visible=passesShown;self.g6.cards.Visible=passesShown end
+    if self.g6 then
+        -- 2026-10-28: VIP is the only pass on sale (Custom Flag / Host+ / Animated Nameplate retired), so the cards row shows
+        -- only while one of its cards still sells (no empty band under VIP)
+        local selling=false
+        for _,card in self.g6.cards:GetChildren() do if Catalog.passById[card:GetAttribute("PassId")] then selling=true end end
+        self.g6.vip.Visible=passesShown;self.g6.cards.Visible=passesShown and selling
+    end
     self.shop.Scroll.Passes.Visible=passesShown and not self.g6
     -- Catalog holds the category-tab grid; Discover's rows are siblings in the Shop list.
     self.shop.Scroll.Catalog.Visible=self.shopCategory~="Currency" and self.shopCategory~="Passes" and self.shopCategory~="All" and not (self.bundleCards and self.shopCategory=="Bundles")
@@ -1077,6 +1187,15 @@ function Page:refreshRows()
         local action=row and row:FindFirstChild("Purchase",true)
         Gui.SelectedObject=if row then (if focusAction and action and action.Selectable then action else if row.Selectable then row else nil) else nil
     end
+    -- BUILD-OUT: a new Shop tab's cards come in: each scales .92 -> 1 (.18 s Quart Out), 30 ms apart (<= .3 s in all), in card
+    -- order; only on a tab switch (a commerce answer's rebuild stays still)
+    if self.enterCards and self.visible and self.page=="Shop" and Motion then
+        local cards={}
+        for _,row in self.rows.Shop do if row:IsA("GuiObject") and row.Visible then table.insert(cards,row) end end
+        table.sort(cards,function(a,b) return a.LayoutOrder<b.LayoutOrder end)
+        Motion.stagger(cards)
+    end
+    self.enterCards=false
 end
 -- PF020 G7 (PF - 3): the Tempest card's hover (the G7 board: the wash brightens, the key's bolt lights),
 -- eased like the kit's own hover. The card kit decides when it is hot; values: AtlasBundleModel.STORM.
@@ -1120,6 +1239,7 @@ function Page:refreshBundles()
         self:bindPurchase(card,item)
         self:bundleBuyLook(item,card) -- PF019 Cobalt buy
     end
+    self:fitBundleNames()
 end
 function Page:refreshProfile()
     local identity=if self.context.getIdentity then table.clone(self.context.getIdentity() or {}) else {}
@@ -1148,6 +1268,43 @@ function Page:refreshProfile()
     end end
 end
 -- A slot tile opens its category (Profile kinds open the Profile tab on that filter).
+-- UI audit (PF - 3, R7: the Tempest card's 3-column tiles drew its member names smaller than the 2-column cards'): every bundle
+-- card's member names (and their kind lines) share one size, the smallest fit across all cards, as each label's text cap. The
+-- words decide it (content), so the cards' own tile layouts stay as authored. Re-fit when the strip resizes.
+function Page:fitBundleNames()
+    local strip=self.bundleStrip or self.bundleCards;if not strip or self.destroyed then return end
+    if not self.bundleFitHooked then
+        self.bundleFitHooked=true
+        listens(self,strip:GetPropertyChangedSignal("AbsoluteSize"),function() self:fitBundleNames() end)
+    end
+    local groups={ItemName={},Kind={}}
+    for _,card in strip:GetChildren() do
+        if not card:IsA("GuiObject") or not card.Visible then continue end
+        local members=hostOf(card):FindFirstChild("Members");if not members then continue end
+        for _,tile in members:GetChildren() do
+            if not (tile:IsA("GuiObject") and tile.Visible) then continue end
+            for name,list in groups do local l=tile:FindFirstChild(name);if l and l:IsA("TextLabel") and l.AbsoluteSize.X>0 then table.insert(list,l) end end
+        end
+    end
+    self.bundleFitSerial=(self.bundleFitSerial or 0)+1;local mine=self.bundleFitSerial
+    task.spawn(function()
+        local TS=game:GetService("TextService")
+        for _,labels in groups do
+            local fit=math.huge
+            for _,l in labels do
+                local ok,b=pcall(function()
+                    local p=Instance.new("GetTextBoundsParams");p.Text=l.ContentText;p.Font=l.FontFace;p.Size=100;p.Width=1e5;return TS:GetTextBoundsAsync(p)
+                end)
+                if ok and b.X>0 then fit=math.min(fit,math.floor(100*l.AbsoluteSize.X/b.X),math.floor(l.AbsoluteSize.Y*.9)) end
+            end
+            if fit==math.huge or self.destroyed or mine~=self.bundleFitSerial then continue end
+            for _,l in labels do
+                local cap=l:FindFirstChildOfClass("UITextSizeConstraint")
+                if cap then cap.MaxTextSize=math.max(cap.MinTextSize,fit) end
+            end
+        end
+    end)
+end
 function Page:openSlot(category: string?)
     local route=category and SLOT_TABS[category];if not route or not self.visible then return end
     self:selectCategory("Inventory",route[1])

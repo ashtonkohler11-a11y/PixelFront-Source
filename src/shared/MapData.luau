@@ -73,7 +73,7 @@ function MapData.generate(_seed: number, mapType: string?, mapSize: string?): Ma
         variants[key]=nil
         local catalog=require(script.Parent.OpenFrontMapCatalog)
         local info=nil;for _,entry in catalog.maps do if entry.type==mapType then info=entry;break end end
-        -- PF029: tutorial-only maps (Honshu) are not in the pinned catalog; their entries are OpenFrontTutorialMapCatalog's
+        -- PF029: tutorial-only maps are not in the pinned catalog; their entries are OpenFrontTutorialMapCatalog's (none now)
         if not info then for _,entry in require(script.Parent.OpenFrontTutorialMapCatalog).maps do if entry.type==mapType then info=entry;break end end end
         assert(info,"Unknown official map")
         assert(mapSize==nil or mapSize=="Normal"or mapSize=="Compact","Invalid official map size")

@@ -11,33 +11,34 @@ M.GLOW=table.freeze({w=160,h=67,cols=6,y=804})
 local A=table.freeze
 -- stats: {key, value, unit}; chip: the scene's callout {x, y (0..1 of the stage), text, kind}
 M.items=A({
-    tesla_coil=A({sheet="rbxassetid://79942442577971",role="Defence",accent="#7fd0ff",per="a copy",
+    tesla_coil=A({sheet="rbxassetid://79942442577971",role="Defence",accent="#7fd0ff",per="each",
         line="Zaps the biggest attack in range, every second.",
-        stats=A({A({"Drain","−1.5%","attack troops / s"}),A({"Range","14","tiles"}),A({"Shells","1 in 2","shot down"})}),
+        stats=A({A({"Drain","−1.5%","attack troops / s"}),A({"Range","24","tiles"}),A({"Shells","1 in 2","shot down"})}),
         chip=A({.525,.642,"−1.5% troops / s","hit"})}),
-    artillery=A({sheet="rbxassetid://83413540399054",role="Attrition",accent="#ffb35c",per="a copy",
+    artillery=A({sheet="rbxassetid://83413540399054",role="Attrition",accent="#ffb35c",per="each",
         line="Shells every rival in range, every 10 seconds.",
         stats=A({A({"Damage","−1.5%","each rival's troops"}),A({"Range","22","tiles"}),A({"Fires","10 s","between volleys"})}),
         chip=A({.9,.53,"−1.5% to every rival","hit"})}),
     airdrop=A({sheet="rbxassetid://119985334280316",role="Airborne",accent="#8fc1ff",per="a launch",
         line="Drops your troops behind their front line.",
-        stats=A({A({"Troops","15%","of your army"}),A({"Range","100","tiles from a Silo"}),A({"Cooldown","60 s","between drops"})}),
+        stats=A({A({"Troops","15%","of your army"}),A({"Range","100","tiles from a Missile Silo"}),A({"Cooldown","60 s","between drops"})}),
         chip=A({.638,.791,"15% of your troops","you"})}),
     blitz_bomb=A({sheet="rbxassetid://92023347557726",role="Nuke",accent="#8fb4ff",per="a launch",
-        line="A bigger, faster Atom that one SAM can still stop.",
-        stats=A({A({"Blast","2.3×","an Atom"}),A({"Speed","1.5×","an Atom's flight"}),A({"Stopped by","1","SAM hit"})}),
-        chip=A({.469,.597,"1.5× faster than an Atom","info"})}),
+        line="A bigger, faster Atom Bomb that one SAM Launcher can still stop.",
+        -- (UI lock-in, MM's R21 call: the build dock's names, Atom Bomb / Hydrogen Bomb / SAM Launcher)
+        stats=A({A({"Blast","2.3×","an Atom Bomb"}),A({"Speed","1.5×","an Atom Bomb's flight"}),A({"Stopped by","1","SAM Launcher hit"})}),
+        chip=A({.469,.597,"1.5× faster than an Atom Bomb","info"})}),
     titan_bomb=A({sheet="rbxassetid://137823267213052",role="Doomsday",accent="#ff9a5a",per="a launch",
-        line="The biggest blast in the game. It takes two SAMs to stop.",
-        stats=A({A({"Blast","1.6×","a Hydrogen"}),A({"Radius","88","tiles"}),A({"Stopped by","2","SAM hits"})}),
+        line="The biggest blast in the game. It takes two SAM Launchers to stop.",
+        stats=A({A({"Blast","1.6×","a Hydrogen Bomb"}),A({"Radius","88","tiles"}),A({"Stopped by","2","SAM Launcher hits"})}),
         chip=A({.419,.754,"88-tile blast","hit"})}),
     engineering_yard=A({sheet="rbxassetid://72787403276876",role="Tempo",accent="#ffc65a",per="one a match",
         line="Every building you place finishes twice as fast.",
-        stats=A({A({"Builds","2×","as fast"}),A({"A SAM","15 s","not 30"}),A({"Covers","All","your buildings"})}),
+        stats=A({A({"Builds","2×","as fast"}),A({"SAM Launcher","15 s","not 30"}),A({"Covers","All","your buildings"})}),
         chip=A({.681,.582,"Builds 2× faster","you"})}),
     -- PF - 2's Industry ramp (2026-10-25, Ashton-approved): the four income items pay nothing before 2:00 and their full
     -- output from 8:00 (PremiumItems industry share), so each card's third stat says when it peaks
-    bank=A({sheet="rbxassetid://109801495746651",role="Income",accent="#ffd36a",per="a copy",
+    bank=A({sheet="rbxassetid://109801495746651",role="Income",accent="#ffd36a",per="each",
         line="A steady +2.5K gold a second. Build up to two.",
         stats=A({A({"Income","+2.5K","gold / s"}),A({"Copies","2","in a match"}),A({"Peaks","8:00","full output"})}),
         chip=A({.48,.24,"Steady gold, every second","gold"})}),
@@ -52,7 +53,7 @@ M.items=A({
     -- premium reshuffle (2026-10-25; Ashton approved PF - 1's Warden / Barracks / Stock Exchange boards and PF - 4's Training Camp
     -- Take B; heroes work/pivot/premium3 bake3.mjs; numbers docs/director/handoffs/PREMIUM-RESHUFFLE-SPEC.md). Longshot, Insurance
     -- and Bounty are retired (entries removed 2026-10-26; their owners hold the stand-ins via ArsenalCatalog.RETIRED).
-    warden=A({sheet="rbxassetid://114404549503043",role="Area hold",accent="#ffd36a",per="a copy",
+    warden=A({sheet="rbxassetid://114404549503043",role="Area hold",accent="#ffd36a",per="each",
         line="Lobs a heavy shell at every attack on you inside its huge ring.",
         stats=A({A({"Range","66","tiles · 3× Artillery"}),A({"Shell","−6%","an attack, every 20 s"}),A({"Hits","Attacks","on you, never at rest"})}),
         chip=A({.538,.687,"−6% an attack, every shell","hit"})}),

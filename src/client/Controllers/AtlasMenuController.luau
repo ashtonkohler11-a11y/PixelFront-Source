@@ -347,7 +347,8 @@ function Controller.new(gui: ScreenGui,hooks: any): any
             local nav=self.header:FindFirstChild("Navigation",true);local shopTab=nav and nav:FindFirstChild("Shop")
             local ok,page=pcall(function()return (require(arsenalModule) :: any).new(root,{shopPage=self.pages.Shop,header=self.header,
                 content=self.commerce and self.commerce.shop,remotes=hooks.shop.remotes,refreshCommerce=commerce.refreshCommerce,
-                freeDot=shopTab and shopTab:FindFirstChild("PFDailyDot",true),back=function()if self.locked then self:closeLockedShop(true) else self:navigate("Play") end end, -- in a match: back to it
+                openCobalt=function()if self.commerce and self.commerce.selectCategory then self.commerce:selectCategory("Shop","Currency") end end, -- UX audit #6
+                freeDot=shopTab and shopTab:FindFirstChild("PFDailyDot",true),back=function()self:shopBack()end, -- in a match: back to it
                 openFree=function()local okView,View=pcall(require,script.Parent.DailyView);if okView and (View :: any).openStreak then (View :: any).openStreak() end end})end)
             if ok then self.arsenal=page else warn("[AtlasMenu] arsenal unavailable: "..tostring(page))end
         end
@@ -361,7 +362,8 @@ function Controller.new(gui: ScreenGui,hooks: any): any
                 back=function()if self.locked then self:closeLockedShop(true) else self:navigate("Play") end end,
                 play=function()if self.locked then self:closeLockedShop(true) else self:navigate("Play") end end,
                 inMatch=function()return self.locked~=nil end,
-                openCobalt=function()if not self.locked then self:navigate("Shop") end end})end)
+                -- UX audit #6: the wallet's + lands on the Cobalt packs, not Discover
+                openCobalt=function()if not self.locked then self:navigate("Shop");self.shopReturn="Armory";if self.commerce and self.commerce.selectCategory then self.commerce:selectCategory("Shop","Currency") end end end})end)
             if ok then self.armory=page else warn("[AtlasMenu] armory unavailable: "..tostring(page))end
         end
     end
@@ -436,6 +438,8 @@ function Controller.new(gui: ScreenGui,hooks: any): any
             home.soloSettings=function()return self:openScreen("Solo")end
             home.customMatches=function()return self:openScreen("Join")end
             home.openShop=function()self:navigate("Shop")end
+            -- build-out: the Home Shop card's balance + lands on the Cobalt packs (like the Armory wallet's)
+            home.openCobalt=function()self:navigate("Shop");if self.commerce and self.commerce.selectCategory then self.commerce:selectCategory("Shop","Currency") end end
             home.openArmory=function()self:openArmory()end -- PIVOT Armory (PF - 3's key)
             home.openLook=function()self:navigate("Inventory")end
             home.openStats=function()self:navigate("Stats")end
@@ -456,6 +460,14 @@ function Controller.new(gui: ScreenGui,hooks: any): any
         local joinNode=self.screensRoot and self.screensRoot:FindFirstChild("Join")
         local createKey=joinNode and joinNode:FindFirstChild("PFCreate",true)
         if createKey and createKey:IsA("GuiButton") then for _,tap in Parts.taps(createKey,joinNode) do listen(self,tap,function()self:openScreen("Create")end) end end
+        -- UI audit build-out (R21: the empty list was a dead end): the empty state's own big Create lobby (author-pf3-build-lobby);
+        -- both keys get the shared press juice (UiMotion)
+        local emptyCreate=joinNode and joinNode:FindFirstChild("PFEmptyCreate",true)
+        if emptyCreate and emptyCreate:IsA("GuiButton") then for _,tap in Parts.taps(emptyCreate,joinNode) do listen(self,tap,function()self:openScreen("Create")end) end end
+        local okM,UiMotion=pcall(function() return require(script.Parent.UiMotion) end)
+        if okM and type(UiMotion)=="table" then
+            for _,key in {createKey,emptyCreate} do if key and key:IsA("GuiButton") then table.insert(self.connections,(UiMotion :: any).press(key)) end end
+        end
     end
     root:SetAttribute("MenuFont","Ubuntu")
     root:SetAttribute("ReducedMotion",false)
@@ -654,10 +666,11 @@ function Controller:navigate(name: string)
     local names=self.names or LEGACY_TABS
     if self.destroyed or not self.root.Parent or not table.find(names,name)or not self.visible then return end
     if self.locked and name~="Shop"then return end -- PF019 M13b: the lobby stays hidden mid-match
-    if name~="Shop" then self.passReturn=nil end -- PF020: leaving the Shop forgets a pass's way back
+    if name~="Shop" then self.passReturn=nil;self.shopReturn=nil end -- PF020: leaving the Shop forgets a pass's way back
     self:closeScreen()
     if name~=self.page and self.page=="Play" and self.pages.Play:GetAttribute("ModalOpen")==true then return end
     if self.page=="Settings" and name~="Settings"then self.hooks.settings:closeSettings(false);self.hooks.settings:setAtlasHost(nil);self:setSettingsSurfaces(false)end
+    local was=if self.armory and self.armory.visible then "Armory" else self.page -- STATS v3: a UI open (below)
     self.page=name;self.root:SetAttribute("AtlasPage",name)
     for _,n in names do
         local button=self.navigation[n];local selected=n==name
@@ -679,6 +692,7 @@ function Controller:navigate(name: string)
     -- PIVOT Armory: the Shop page carries the Armory (openArmory, or a match's grid: locked.tab "Armory"); any other visit is Cosmetics
     local armory=name=="Shop" and (self.wantArmory==true or (self.locked~=nil and self.locked.tab=="Armory"));self.wantArmory=nil
     if self.armory then self.armory:setVisible(armory==true,self.locked and self.locked.item) end
+    local now=if armory then "Armory" else name;if now~=was then pcall(function() require(script.Parent.StatsReport).open(now) end) end
     if self.arsenal then self.arsenal:sync(name,self.locked~=nil,armory) end -- PIVOT D12: the Shop's top bar takes the Header's place
     if self.pageTop then self.pageTop:sync(name,self.locked~=nil) end -- PF044 r5: Inventory / Stats too
     if self.dailyPage then self.dailyPage:setVisible(name=="Daily") end -- PF043 B3
@@ -725,6 +739,7 @@ function Controller:handleEscape(): boolean
     end
     local active=if self.page=="Play"then self.play elseif self.page=="Stats"then self.statsPage else self.commerce
     if active.handleEscape and active:handleEscape()then return true end
+    if self.page=="Shop" and self.shopReturn then self:shopBack();return true end
     if self.page~="Play"then self:navigate("Play");return true end
     return true
 end
@@ -739,6 +754,8 @@ function Controller:openLockedShop(options: any?): boolean
     self:navigate("Shop")
     if self.page~="Shop"then self:hide();return false end
     self.lockedShop:show(self.locked)
+    -- UX audit #4: the end card's Next unlock opens the Shop on that item's tab (options.category, a Shop category)
+    if type(self.locked.category)=="string" and self.commerce.selectCategory then self.commerce:selectCategory("Shop",self.locked.category) end
     return true
 end
 -- PIVOT Armory: the premium showroom from the lobby (the Shop page with AtlasMenu.PFArmory over it)
@@ -746,6 +763,13 @@ function Controller:openArmory(): boolean
     if self.destroyed or not self.visible or not self.armory or self.locked then return false end
     self.wantArmory=true;self:navigate("Shop")
     return self.armory.visible
+end
+-- UI audit (PF - 3, 2026-10-28): the Shop's Back goes where the Shop was opened from: the Armory's wallet + returns to the
+-- Armory (it used to drop the player on Home); a match's locked shop goes back to the battle
+function Controller:shopBack()
+    if self.locked then self:closeLockedShop(true);return end
+    if self.shopReturn=="Armory" then self.shopReturn=nil;if self:openArmory() then return end end
+    self:navigate("Play")
 end
 function Controller:closeLockedShop(back: boolean?)
     local locked=self.locked;if not locked then return end

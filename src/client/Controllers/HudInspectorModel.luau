@@ -46,11 +46,12 @@ function Model.landShare(state: any,owner: number): number
     local valid=((state.map and state.map.landCount) or 0)-(state.falloutCount or 0)
     return if valid>0 then (state.counts[owner] or 0)/valid*100 else 0
 end
+-- UI audit 2026-10-28 (one land share, three formats on one screen): the leaderboard's format everywhere: one decimal, and
+-- "<0.1%" while any land is held below it (tester round 2026-10-13, BILLY: land never reads 0.0% while any is held)
 function Model.percent(value: number): string
     if value~=value or value<=0 then return "0%" end
-    if value<.005 then return "<0.01%" end -- tester round 2026-10-13 (BILLY): land never reads 0.00% while any is held
-    if value<1 then return string.format("%.2f%%",value) end
-    return string.format("%.1f%%",value)
+    if value<.05 then return "<0.1%" end
+    return string.format("%.1f%%",math.floor(value*10+.5)/10)
 end
 function Model.clock(seconds: number): string
     local whole=math.max(0,math.floor(seconds))

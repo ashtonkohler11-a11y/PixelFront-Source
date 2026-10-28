@@ -21,6 +21,8 @@ local Run=game:GetService("RunService")
 local Shared=game:GetService("ReplicatedStorage").Shared
 local Art=require(Shared.TutorialTrackerArt)
 local Icons=require(Shared.PixelFrontIconAssets)
+-- UI audit build-out 2026-10-28: the shared motion kit (PF - 4's UiMotion); nil where it can't load (test fakes)
+local Motion: any=(function() local ok,mod=pcall(function() return require(script.Parent.UiMotion) end);return if ok and type(mod)=="table" and type(mod.tween)=="function" then mod else nil end)()
 local Tracker={};Tracker.__index=Tracker
 Tracker.now=os.clock
 local STEPS=#Art.Steps
@@ -253,9 +255,9 @@ end
 function Tracker.nukeWords(goal: any,stop: number,saving: any?): (string,boolean)
     if stop==1 then return "Save for a Missile Silo",true
     elseif stop==2 then return "Build a Missile Silo",false
-    elseif stop==3 then return "Silo arming · "..tostring(goal.armSeconds or "").." s",false
+    elseif stop==3 then return "Missile Silo arming · "..tostring(goal.armSeconds or "").." s",false
     elseif goal.ready then return "Fire! Pick a bomb",false
-    elseif goal.reloading then return "Silo reloading",false end
+    elseif goal.reloading then return "Missile Silo reloading",false end
     return "Save for an Atom Bomb",saving~=nil
 end
 -- The bound key for the action (the model's goal.key, or "Press X, ..." in its line); nil on touch / gamepad.
@@ -410,9 +412,13 @@ function Tracker.missionRight(view: any): any
     if key=="capital" then
         return {kind="act",words=goal.headline or "Click open land",f=0}
     elseif key=="expand" then
-        return {kind="progress",f=goal.f or 0,amount=(goal.amount or "")..'<font color="#8d97a6"> / '..(goal.of or "")..' land</font>'}
+        -- the bar reads as its numbers do ("52 / 352 land" = 15% full; UI audit 2026-10-28: it filled from the step's start,
+        -- so it sat empty beside 52 / 352 and looked stuck); the segment ghost keeps its progress since the step began
+        local f=if type(goal.goalLand)=="number" and goal.goalLand>0 then math.clamp((goal.land or 0)/goal.goalLand,0,1) else goal.f or 0
+        return {kind="progress",f=f,amount=(goal.amount or "")..'<font color="#8d97a6"> / '..(goal.of or "")..' land</font>'}
     elseif key=="attackNation" then
-        if goal.none then return {kind="none",f=0,hint="Expand until you touch a nation"} end
+        -- MM 2026-10-26 (live run: the right side was empty): the step's status, "Attack any nation", until one is in reach
+        if goal.none then return {kind="act",words="Attack any nation",f=0,hint="Expand until you touch a nation"} end
         return {kind="act",words=goal.headline or "Click their land",f=.12,hint="Attack "..tostring(goal.name)..". No need to win."}
     elseif key=="wilderness" then
         local tap=type(goal.headline)=="string" and string.find(goal.headline,"^Tap")~=nil
@@ -425,6 +431,10 @@ function Tracker.missionRight(view: any): any
         local numbers=(stop==1 or (stop==4 and not goal.ready)) and saving~=nil
         return {kind=if numbers then "progress" else "none",f=nukeStopF(goal,stop,saving),hint=words,
             amount=if numbers and saving then (saving.goldText or "")..'<font color="#8d97a6"> / '..(saving.priceText or "")..'</font>' else nil}
+    elseif key=="tribe" and goal.taken~=nil then
+        -- PF - 2 2026-10-26: the step is tribe land taken toward the server's goal (not one tribe to the last tile)
+        return {kind="progress",f=goal.f or 0,amount=(goal.amount or "")..'<font color="#8d97a6"> / '..(goal.of or "")..' tiles</font>',
+            hint=if goal.none then "Expand until you touch a tribe" else "Take land from "..tostring(goal.name)}
     elseif (key=="tribe" or key=="nation") and goal.none then
         return {kind="none",f=0,hint=Tracker.fightWords(view,false)}
     elseif key=="tribe" or key=="nation" then
@@ -437,8 +447,16 @@ end
 function Tracker:fillMission(m: any,view: any)
     local color=c3(view.color)
     local meta=Art.Steps[view.step] or {}
+    -- a new step: its title pops in (1.08 -> 1) and the eyebrow flashes gold once
+    local fresh=m:GetAttribute("PFStep")~=view.step
+    m:SetAttribute("PFStep",view.step)
     setText(m.Eyebrow,"STEP "..view.step.." OF "..view.total,color)
     setText(m.Title,view.title)
+    if fresh and Motion and m.Title:IsA("GuiObject") then
+        Motion.pop(m.Title,1.08,.2)
+        local eyebrow=m.Eyebrow;local was=eyebrow.TextColor3
+        eyebrow.TextColor3=Color3.fromHex("#ffd77a");Motion.tween(eyebrow,{TextColor3=was},.4)
+    end
     local right=Tracker.missionRight(view)
     setText(m.Hint,right.hint or meta.hint or "")
     local image,offset,size=Tracker.missionGlyph(view.key)
@@ -487,16 +505,21 @@ function Tracker:update(view: any,completions: {number}?)
     self:applyVisible()
 end
 local function variants(self: any): {any} return {self.desk,self.phone} end
+-- A step's done stamp. Step 3 that completed by itself (no tribe on your border for 45 s, PF - 2) says so instead.
+function Tracker.stampWords(meta: any,view: any?): string
+    if meta.key=="tribe" and type(view)=="table" and view.tribeSkipped then return "NO TRIBES NEARBY" end
+    return meta.stamp
+end
 function Tracker:startPayoff()
     local entry=table.remove(self.queue,1)
     local meta=Art.Steps[entry.step]
     self.payoff={step=entry.step,quick=entry.quick,start=Tracker.now(),key=meta.key,chimed=false,switched=false,
-        reduced=self:reduced(),duration=if entry.quick then QUICK else PAYOFF}
+        reduced=self:reduced(),duration=if entry.quick then QUICK else PAYOFF,stamp=Tracker.stampWords(meta,self.view)}
     self.tickAt=nil
     local color=c3(meta.color)
     for _,v in variants(self) do
         local stamp=v.Stamp
-        setText(stamp.Text,meta.stamp,color)
+        setText(stamp.Text,self.payoff.stamp,color)
         stamp.Back.Rim.Color=color;stamp.Inner.Rim.Color=color;stamp.Check.BackgroundColor3=color;stamp.Glow.ImageColor3=color
         stamp.Visible=false
         v.Glow.ImageColor3=color
@@ -560,7 +583,7 @@ function Tracker:pose(t: number)
             if show then
                 m.Pr.Visible=false;m.Act.Visible=false;m.Reward.Visible=false
                 local stamp=m.Stamp;stamp.Visible=true
-                setText(stamp,meta.stamp.." ✓",color);stamp.Rim.Color=color
+                setText(stamp,(p.stamp or meta.stamp).." ✓",color);stamp.Rim.Color=color
                 local k1,k2=clamp01((t-.26)/.08),clamp01((t-.34)/.26)
                 stamp.Slam.Scale=if reduced then 1 else (if t<.34 then 1.6-.46*outCubic(k1) else 1.14-.14*outCubic(k2))
                 stamp.TextTransparency=if reduced then 1-clamp01((t-.26)/.2) else 0

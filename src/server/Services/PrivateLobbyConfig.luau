@@ -75,7 +75,7 @@ function PrivateConfig.sanitize(input: any?, maxPlayers: number, hostPlus: boole
         end
         config.gameMap = fields.gameMap
     end
-    config.difficulty = "Medium"
+    config.difficulty = "Easy"
     if fields.difficulty ~= nil then
         if not table.find(Lobby.Difficulties, fields.difficulty) then return nil, "Invalid difficulty." end
         config.difficulty = fields.difficulty
@@ -106,15 +106,15 @@ function PrivateConfig.sanitize(input: any?, maxPlayers: number, hostPlus: boole
     else
         config.playerTeams = 2
     end
-    config.bots = 25
+    config.bots = 60 -- Ashton 2026-10-27: tribes x2.5 (was 25; the cap is Availability.MaxTribes)
     if fields.bots ~= nil then
-        if not integer(fields.bots, 0, Availability.MaxTribes) then return nil, "Choose between 0 and 50 tribes." end
+        if not integer(fields.bots, 0, Availability.MaxTribes) then return nil, "Choose between 0 and " .. Availability.MaxTribes .. " tribes." end
         config.bots = fields.bots
     end
     local humansVsNations = isTeam and config.playerTeams == "Humans Vs Nations"
     local nations = Availability.defaultNations(config.gameMap)
     if fields.nations ~= nil then
-        if not integer(fields.nations, 0, Availability.MaxNations) then return nil, "Choose between 0 and 25 nations." end
+        if not integer(fields.nations, 0, Availability.MaxNations) then return nil, "Choose between 0 and " .. Availability.MaxNations .. " nations." end
         nations = fields.nations
     end
     -- Humans Vs Nations always fields one nation per admitted human.

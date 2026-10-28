@@ -134,6 +134,15 @@ function Structures.captureOwned(state: any, owner: number, orderedUnits: { any 
                 local index = table.find(order[owner], value.id)
                 if index then table.remove(order[owner], index) end
                 value.owner, value.deletionMarkedTick = nextOwner, nil
+                -- stats v3 (observer; SkillFacts sets the table): captures per captor, and those from an owner a third party was attacking
+                local captures = state.buildingCaptures
+                if captures then
+                    local entry = captures[nextOwner] or { total = 0, opening = 0 }; captures[nextOwner] = entry
+                    entry.total += 1
+                    for _, attack in state.attacks do
+                        if attack.active and attack.targetOwner == owner and attack.owner ~= nextOwner and attack.owner ~= owner then entry.opening += 1; break end
+                    end
+                end
                 if kind == "Factory" and state.invalidateRailUnitCounts then state.invalidateRailUnitCounts("Factory") end
                 table.insert(order[nextOwner], value.id); Ports.recordAcquisition(state, value)
             end

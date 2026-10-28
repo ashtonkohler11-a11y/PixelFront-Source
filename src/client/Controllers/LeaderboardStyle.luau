@@ -18,7 +18,7 @@ Style.Groups=table.freeze({
 })
 Style.ChipLabels=table.freeze({clan="Clan",playerType="Type",tiles="Owned",troops="Troops",maxtroops="Max troops",gold="Gold",
     goldIncomePerMin="Income/min",shipTradeGoldPerMin="Trade ships/min",piracyGoldPerMin="Piracy/min",trainTradeGoldPerMin="Trains/min",
-    cities="Cities",ports="Ports",factories="Factories",silos="Launchers",sams="SAMs",warships="Warships",allies="Allies",betrayals="Betrayals"})
+    cities="Cities",ports="Ports",factories="Factories",silos="Missile Silos",sams="SAM Launchers",warships="Warships",allies="Allies",betrayals="Betrayals"})
 -- Short caps column labels (the full name stays in each header's tooltip).
 Style.HeaderLabels=table.freeze({rank="#",clan="CLAN",player="NATION",playerType="TYPE",tiles="LAND",gold="GOLD",goldIncomePerMin="GOLD/M",
     shipTradeGoldPerMin="SHIP/M",piracyGoldPerMin="PIRACY/M",trainTradeGoldPerMin="TRAIN/M",troops="TROOPS",maxtroops="MAX",
@@ -39,7 +39,9 @@ Style.Motion=table.freeze({hover=Theme.HoverTime,press=Theme.PressTime,select=Th
 -- what is shown is drawn, at any row count, inside a region of any height.
 Style.Design=table.freeze({
     width=360,strip=44,foot=8,yourTeam=24,labels=20,row=30,more=14,inset=4,cellPad=8,gap=4,button=32,icon=16,
-    rank=22,ident=34,dot=8,avatar=18,clan=40,playerType=48,stat=50,teamRows=4,radius=8,rowRadius=6,cellGap=8,minName=40,chip=30,
+    -- rank 30 / stat 46 (UI audit build-out 2026-10-28; were 22 / 50): a 3-digit rank ("150") wrapped to "15"/"0" in 22, and
+    -- the number columns had slack while names truncated; the three stat columns still fit
+    rank=30,ident=34,dot=8,avatar=18,clan=40,playerType=48,stat=46,teamRows=4,radius=8,rowRadius=6,cellGap=8,minName=40,chip=30,
 })
 local D=Style.Design
 local inner=D.width-D.inset*2 -- table rows sit inside the card's side inset
@@ -68,7 +70,7 @@ Style.LevelSlot=table.freeze({height=.62,aspect=1.84})
 Style.CellScale=table.freeze({rank=D.rank/cells,ident=D.ident/cells,clan=D.clan/cells,playerType=D.playerType/cells,stat=D.stat/cells,
     level=D.row*Style.LevelSlot.height*Style.LevelSlot.aspect/cells})
 -- Pixel floors (UISizeConstraint) so scaled-down cards keep legible cells.
-Style.MinCell=table.freeze({rank=22,clan=30,playerType=36,stat=44})
+Style.MinCell=table.freeze({rank=30,clan=30,playerType=36,stat=44})
 Style.Text=table.freeze({title=14,count=12,label=11,rank=12,name=14,value=14,chip=13,min=8,nameFixed=13})
 -- Row/header column order: the clan tag follows the nation name.
 Style.CellOrder=table.freeze({rank=1,player=3,clan=4,playerType=5,tiles=10,gold=11,goldIncomePerMin=12,shipTradeGoldPerMin=13,

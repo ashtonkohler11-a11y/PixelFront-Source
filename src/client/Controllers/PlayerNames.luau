@@ -15,6 +15,7 @@ local GraphicsSettings=require(game:GetService("ReplicatedStorage").Shared.OpenF
 local Names = {}
 local CosmeticArt=require(script.Parent.CosmeticArt)
 local CustomFlagView=require(script.Parent.CustomFlagView) -- PF020 G1 (PF - 3)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local Players=game:GetService("Players")
 local Catalog=require(game:GetService("ReplicatedStorage").Shared.CosmeticCatalog)
 local FIRST_LAYOUT_SECONDS=.012 -- per update, for names laid out the first time (see Names:update)
@@ -332,9 +333,13 @@ function Names:draw(scale: number, viewport: Frame, world: Frame, highlighted: n
     local now = os.clock()
     local map = self.state.map
     local settings=(self.graphics or GraphicsSettings.resolve()).name
-    local width = math.max(viewport.AbsoluteSize.X,1)
-    local viewportPosition,viewportSize=viewport.AbsolutePosition or Vector2.zero,viewport.AbsoluteSize
-    local worldPosition=world.AbsolutePosition
+    local viewportPosition,viewportSize,worldPosition
+    if okGeo then
+        viewportPosition,viewportSize,worldPosition=Geo.viewportPosition(viewport) or Vector2.zero,Geo.viewportSize(viewport),Geo.worldPosition(world)
+    else
+        viewportPosition,viewportSize,worldPosition=viewport.AbsolutePosition or Vector2.zero,viewport.AbsoluteSize,world.AbsolutePosition
+    end
+    local width = math.max(viewportSize.X,1)
     local worldX,worldY=worldPosition.X,worldPosition.Y
     local mouseX,mouseY=if mouse then mouse.X else 0,if mouse then mouse.Y else 0
     local fadeOwner = 0

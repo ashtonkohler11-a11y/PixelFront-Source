@@ -22,14 +22,20 @@ UiSize.keys=table.freeze({Small=.88,Normal=1,LargeCompact=1.06,Large=1.12,Phone=
 function UiSize.isPhone(gameUI: GuiObject?): boolean
     return gameUI~=nil and gameUI.AbsoluteSize.Y>0 and gameUI.AbsoluteSize.Y<UiSize.PHONE_HEIGHT
 end
--- the PFPhoneVariant nodes under root: "<Property>_Phone" in, "<Property>_Base" out
-function UiSize.applyPhoneVariants(root: Instance,phone: boolean)
+-- UI audit build-out 2026-10-28 (R2 one layout, MM: "drop the HUD's runtime phone shrink/swaps"): a game UI marked PFOneLayout
+-- (author-pf1-one-layout) keeps its authored layout on every screen, so the Edit emulator shows what Play shows: its panels skip
+-- PF019PhoneScale, its PFPhoneVariant nodes keep their _Base values, its regions use the Normal variants. Unmarked: as before.
+-- A PFUiSize marked PFOneKeepPhoneScale (the attack and notice columns: fixed px columns of px-built rows) keeps its phone scale.
+function UiSize.oneLayout(gameUI: Instance?): boolean return gameUI~=nil and gameUI:GetAttribute("PFOneLayout")==true end
+-- the PFPhoneVariant nodes under root: "<Property>_Phone" in, "<Property>_Base" out (keep: a subtree that stays on _Base)
+function UiSize.applyPhoneVariants(root: Instance,phone: boolean,keep: Instance?)
     for _,node in CollectionService:GetTagged("PFPhoneVariant") do
         if not node:IsDescendantOf(root) then continue end
+        local swap=phone and not (keep~=nil and node:IsDescendantOf(keep))
         for name,value in node:GetAttributes() do
             if string.sub(name,-6)~="_Phone" then continue end
             local prop=string.sub(name,1,-7)
-            local want=if phone then value else node:GetAttribute(prop.."_Base")
+            local want=if swap then value else node:GetAttribute(prop.."_Base")
             if want==nil then continue end
             pcall(function() if (node :: any)[prop]~=want then (node :: any)[prop]=want end end)
         end
@@ -101,17 +107,20 @@ function UiSize.apply(root: Instance,choice: any): (string,number)
     local gameUI=background and background:FindFirstChild("Game")
     local key,scale=UiSize.effective(if gameUI and gameUI:IsA("GuiObject") then gameUI else nil,choice)
     local phone=key=="Phone"
+    local one=if UiSize.oneLayout(gameUI) then gameUI else nil -- R2: the HUD's one layout (above)
     for _,node in root:GetDescendants() do
         if node.Name=="PFUiSize" and node:IsA("UIScale") then
             -- PFRobloxTopbar (author-pf4-topbar-roblox): the top buttons match Roblox's own 44 px discs on every device and size
-            local s=if node:GetAttribute("PFRobloxTopbar")==true then 1 else scale*(if phone then (tonumber(node:GetAttribute("PF019PhoneScale")) or 1) else 1)
+            local hud=one~=nil and node:IsDescendantOf(one) and node:GetAttribute("PFOneKeepPhoneScale")~=true
+            local s=if node:GetAttribute("PFRobloxTopbar")==true then 1 else scale*(if phone and not hud then (tonumber(node:GetAttribute("PF019PhoneScale")) or 1) else 1)
             if node.Scale~=s then node.Scale=s end
         end
     end
-    UiSize.applyPhoneVariants(root,phone)
+    UiSize.applyPhoneVariants(root,phone,one)
     if gameUI then
-        UiSize.layoutRegions(gameUI,key)
-        if gameUI:GetAttribute("PF019UiSizeKey")~=key then gameUI:SetAttribute("PF019UiSizeKey",key) end
+        local hudKey=if one and phone then "Normal" else key
+        UiSize.layoutRegions(gameUI,hudKey)
+        if gameUI:GetAttribute("PF019UiSizeKey")~=hudKey then gameUI:SetAttribute("PF019UiSizeKey",hudKey) end
     end
     return key,scale
 end

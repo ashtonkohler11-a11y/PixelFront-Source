@@ -96,6 +96,13 @@ function Interface.new(gui: ScreenGui): any
             listen(item:GetPropertyChangedSignal("AbsoluteSize"),function() self:followBoard() end)
         end
     end
+    -- PF - 3 variant C: the Premium rail (fixed under the board) caps the attack column's top (layoutColumn)
+    local rail=self.game:FindFirstChild("PFPremiumRail")
+    if rail and rail:IsA("GuiObject") then
+        listen(rail:GetPropertyChangedSignal("Visible"),function() self:followBoard() end)
+        listen(rail:GetPropertyChangedSignal("AbsoluteSize"),function() self:followBoard() end)
+        listen(rail:GetPropertyChangedSignal("AbsolutePosition"),function() self:followBoard() end) -- its authored phone variant
+    end
     for _,item in {self.game,self.game.Controls} do listen(item:GetPropertyChangedSignal("AbsoluteSize"),function() self:followBoard() end) end
     -- PF019 W7 S9: a UI size change picks the regions' authored size variants.
     listen(self.game:GetAttributeChangedSignal("PF019UiSizeKey"),function() self:followTopbar();self:followBoard() end)
@@ -201,7 +208,7 @@ local function sized(item: Instance,name: string,key: string?): any
     return value
 end
 -- The column layout (exported so Edit checks run the real thing); reads laid-out geometry,
--- writes only authored sizes.
+-- writes only authored sizes. (The Premium rail's spot under the open board is authored: tools/atlas/author-pf3-rail-anchor.)
 function Interface.layoutColumn(ui: Frame)
     local key=ui:GetAttribute("PF019UiSizeKey")
     local board=ui:FindFirstChild("PFLeaderboardRegion")
@@ -226,6 +233,20 @@ function Interface.layoutColumn(ui: Frame)
             local ratio=if attacks.Size.X.Scale*span+attacks.Size.X.Offset>0 then attacks.AbsoluteSize.X/(attacks.Size.X.Scale*span+attacks.Size.X.Offset) else 1
             local room=(right-(dockRight+gap))/math.max(ratio,1e-3)
             if authored>room then width=UDim.new(0,math.floor(room)) end
+        end
+        -- PF - 3 variant C: the attack rows hug the dock line and grow up; under a visible Premium rail they stop below it
+        -- (the column keeps its bottom; only its height shrinks, in authored units like the Beside width above)
+        local rail=ui:FindFirstChild("PFPremiumRail")
+        if rail and rail:IsA("GuiObject") and rail.Visible and rail.AbsoluteSize.Y>0 then
+            local ax,aw=attacks.AbsolutePosition.X,attacks.AbsoluteSize.X
+            if ax<rail.AbsolutePosition.X+rail.AbsoluteSize.X and ax+aw>rail.AbsolutePosition.X then
+                local span=ui.AbsoluteSize.Y;local authored=height.Scale*span+height.Offset
+                local current=attacks.Size.Y.Scale*span+attacks.Size.Y.Offset
+                local ratio=if current>0 then attacks.AbsoluteSize.Y/current else 1
+                local bottom=attacks.AbsolutePosition.Y+attacks.AbsoluteSize.Y
+                local room=(bottom-(rail.AbsolutePosition.Y+rail.AbsoluteSize.Y+gap))/math.max(ratio,1e-3)
+                if authored>room then height=UDim.new(0,math.max(0,math.floor(room))) end
+            end
         end
         local size=UDim2.new(width,height)
         if attacks.Size~=size then attacks.Size=size end

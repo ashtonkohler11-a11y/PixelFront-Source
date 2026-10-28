@@ -14,6 +14,8 @@
 local DailyClient=require(script.Parent.DailyClient)
 local RewardDrop=require(script.Parent.RewardDrop)
 local Showcase=require(script.Parent.ArmoryShowcase)
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- UI lock-in BUILD-OUT (PF - 4)
+local Motion: any=if okMotion and type(UiMotion)=="table" and type((UiMotion :: any).tween)=="function" then UiMotion else nil -- (CLI loaders stub unknown modules)
 local Row={};Row.__index=Row
 Row.FLUSH=6 -- seconds to wait for the claim reply (an Arsenal unlock is a wallet transaction) before the drop plays what landed
 local hex=Color3.fromHex
@@ -21,7 +23,8 @@ local hex=Color3.fromHex
 -- (PF - 1, work/pivot/glacier/upload/ids.json) and its stage crop (960 x 540 painting), how each Armory scene is framed
 Row.PILE=table.freeze({[1]="rbxassetid://91398831925075",[3]="rbxassetid://84463129581235",[5]="rbxassetid://79498043828677",[6]="rbxassetid://82486807889221"})
 Row.GLACIER=table.freeze({stage="rbxassetid://93428568166340",offset=Vector2.new(69,58),size=Vector2.new(826,346),tile="rbxassetid://131351477472245"})
-Row.PACKS=table.freeze({glacier=table.freeze({name="Glacier Pack",kind="PACK · 5 ITEMS",accent="#8fd4ff"})})
+-- UI audit (R21): one name for Day 4's reward everywhere: "Glacier set" (the Icicle card's link says it too)
+Row.PACKS=table.freeze({glacier=table.freeze({name="Glacier set",kind="SET · 5 ITEMS",accent="#8fd4ff"})})
 Row.HERO_ASPECT,Row.THUMB_ASPECT=482/202,2 -- the authored stage and track thumbnails (w / h)
 Row.SCRIM=NumberSequence.new({NumberSequenceKeypoint.new(0,.12),NumberSequenceKeypoint.new(.34,.55),NumberSequenceKeypoint.new(.56,1),NumberSequenceKeypoint.new(1,1)})
 Row.SCRIM_DEEP=NumberSequence.new({NumberSequenceKeypoint.new(0,.04),NumberSequenceKeypoint.new(.4,.28),NumberSequenceKeypoint.new(.66,.85),NumberSequenceKeypoint.new(1,1)})
@@ -97,11 +100,26 @@ function Row.new(nodes: any,ctx: any): any
     for _,r in self:rows() do
         if not r then continue end
         -- each key's invisible Hit (a 44 px floor around the scaled key) takes the taps
-        local claim=r:FindFirstChild("Claim",true);claim=claim and (claim:FindFirstChild("Hit") or claim)
+        local key=r:FindFirstChild("Claim",true)
+        local claim=key and (key:FindFirstChild("Hit") or key)
         if claim then on(claim.Activated,function() self:claim() end) end
         local get=r:FindFirstChild("GetVip",true);get=get and (get:FindFirstChild("Hit") or get)
         if get then on(get.Activated,function() if ctx.getVip then ctx.getVip() end end) end
+        -- BUILD-OUT: the Claim breathes 1 <-> 1.03 (1.2 s, from its centre) while it shows (the loop rests while it's hidden)
+        if Motion and key and key:IsA("GuiObject") then Motion.breathe(key,{period=1.2,amp=.03}) end
     end
+    -- UI audit (R21): the Shop row's day track opens the 7-day sheet (the comment above always said so; nothing was wired)
+    for _,r in {nodes.desk,nodes.phone} do
+        local week=r and r:FindFirstChild("Week",true)
+        if week and week:IsA("GuiObject") then
+            week.Active=true
+            on(week.InputEnded,function(input: InputObject)
+                if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
+                local ok,View=pcall(require,script.Parent.DailyView);if ok and (View :: any).openStreak then (View :: any).openStreak() end
+            end)
+        end
+    end
+    self.glows={};self.looks={}
     if nodes.offers then on(nodes.offers:GetPropertyChangedSignal("Visible"),function() self:paint() end) end
     table.insert(self.connections,{Disconnect=DailyClient.changed(function() self:paint() end)} :: any)
     table.insert(self.connections,{Disconnect=DailyClient.claimed(function(c: any) self:onDaily(c) end)} :: any)
@@ -128,11 +146,14 @@ local function paintStation(s: any,tile: any,i: number,look: string)
     local kind,done=Row.kind(tile),look=="claimed"
     local owned=type(tile)=="table" and tile.owned==true
     local icon=s:FindFirstChild("Icon")
+    local thumb=s:FindFirstChild("Thumb")
+    -- a station authored for a scene (Thumb) can turn into a Cobalt day (PF - 2, 2026-10-28: Day 2 = 600 Cobalt): the scene shows
+    -- only on an arsenal day, the pile icon (author-pf4-buildout gives Day 2 one) on every other
+    if thumb and icon then thumb.Visible=kind=="arsenal";icon.Visible=kind~="arsenal" end
     if icon then
         icon.Image=if kind=="pack" then Row.GLACIER.tile else (Row.PILE[i] or Row.PILE[1])
         icon.ImageColor3=if done then GREY else Color3.new(1,1,1);icon.ImageTransparency=if done then .45 else 0
     end
-    local thumb=s:FindFirstChild("Thumb")
     if thumb and kind=="arsenal" then
         local sc=thumb:FindFirstChild("Scene");local item=Showcase.items[tile.arsenal];local f=Row.FRAMING[tile.arsenal]
         if sc and item and f and sc:GetAttribute("PFFor")~=tile.arsenal then
@@ -220,7 +241,11 @@ function Row:paint()
     if self.sheet.desk then self.sheet.desk.Visible=v.loaded and not phone end
     if self.sheet.phone then self.sheet.phone.Visible=v.loaded and phone end
     if self.sheet.modal then self.sheet.modal.Visible=v.loaded end
-    if self.nodes.dot then self.nodes.dot.Visible=v.ready end
+    if self.nodes.dot then
+        -- BUILD-OUT: the Shop tab's gold dot pops in (0 -> 1, .2 s Back) when the claim opens; no loop
+        local dot=self.nodes.dot
+        if v.ready and not dot.Visible and Motion then Motion.open(dot,{from=.01}) else dot.Visible=v.ready end
+    end
     self.view=v
     if not v.loaded then return end
     local busy=self.collect~=nil
@@ -235,6 +260,7 @@ function Row:paint()
             local travelled=(if v.streakReady then v.today-1 else v.today)-1 -- legs behind you
             if line and lit then lit.Visible=travelled>0;lit.Size=UDim2.fromScale(line.Size.X.Scale*math.max(0,travelled)/6,line.Size.Y.Scale) end
             for i=1,7 do paintStation(week:FindFirstChild("Day"..i),v.tiles[i],i,Row.tileState(i,v.today,v.streakReady)) end
+            self:motion(week,v)
         end
         -- the key: the gem on a Cobalt day only
         local claim,claimed=card:FindFirstChild("Claim"),card:FindFirstChild("Claimed")
@@ -260,6 +286,25 @@ function Row:paint()
             local get=lane:FindFirstChild("GetVip");if get then get.Visible=not v.vip end
         end
         placeGems(card)
+    end
+end
+-- BUILD-OUT (PF - 4): the week's life. Today's tile (the join modal's gold-rimmed one) glows softly while it waits; a tile that
+-- just turned claimed pops its ✓ (1.3 -> 1, .3 s Back). Everything via UiMotion (still under Reduced motion).
+function Row:motion(week: any,v: any)
+    if not Motion or not self.glows then return end
+    for i=1,7 do
+        local s=week:FindFirstChild("Day"..i);if not s then continue end
+        local look=Row.tileState(i,v.today,v.streakReady)
+        local tr=s:FindFirstChild("TileRim")
+        if tr and tr:IsA("UIStroke") and s:GetAttribute("PFModalTile") then
+            if look=="today" and not self.glows[tr] then self.glows[tr]=Motion.glow(tr,{lo=0,hi=.5,period=2.4})
+            elseif look~="today" and self.glows[tr] then self.glows[tr]();self.glows[tr]=nil;tr.Transparency=if i==7 then .35 else 0 end
+        end
+        local before=self.looks[s];self.looks[s]=look
+        if before=="today" and look=="claimed" then
+            local mark=s:FindFirstChild("Mark");local check=mark and mark:FindFirstChild("Check")
+            if check and check:IsA("GuiObject") then Motion.pop(check,1.3,.3) elseif mark then Motion.pop(mark,1.3,.3) end
+        end
     end
 end
 -- once a second: the timer and the label gems; every frame: the stage's flipbook and the Claim key's light sweep

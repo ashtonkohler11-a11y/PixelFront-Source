@@ -7,6 +7,7 @@ local MarketplaceService=game:GetService("MarketplaceService")
 local Remotes=require(game.ReplicatedStorage.Shared.Remotes)
 local Catalog=require(game.ReplicatedStorage.Shared.CosmeticCatalog)
 local Arsenal=require(game.ReplicatedStorage.Shared.ArsenalCatalog) -- PF044: premium unlocks share the Cobalt wallet
+local HOST_PLUS_FREE=require(game.ReplicatedStorage.Shared.LobbyContract).HostPlus.free==true -- Ashton 2026-10-27
 local Profiles=require(script.Parent.CosmeticProfiles)
 local Service={}
 local started=false
@@ -46,7 +47,11 @@ function Service.start()
     local players: {[number]: Player}={}
     local okAnalytics,Analytics=pcall(require,script.Parent.AnalyticsHooks) -- PF037: every Cobalt grant and spend
     engine=Profiles.new({catalog=Catalog,arsenal=Arsenal,studio=studio,now=os.clock,spawn=task.spawn,wait=task.wait,
-        economy=if okAnalytics then Analytics.economy else nil,
+        -- UI audit build-out: the same event also counts into the daily stats (Cobalt earned by source / spent by item)
+        economy=function(e: any)
+            if okAnalytics then Analytics.economy(e) end
+            pcall(function() require(script.Parent.PlayerProfileService).cobalt(e) end)
+        end,
         -- PF044 Revive: the 49 R$ product (0 = none yet: never routed) and the hook that applies a paid one to an open offer
         reviveProductId=require(game.ReplicatedStorage.Shared.Config).Revive.ProductId,        revivePurchased=function(userId: number,purchaseId: string) require(script.Parent.ReviveService).purchased(userId,purchaseId) end,
         -- PF044: an Arsenal unlock (Cobalt or Robux) reaches the player's live match (Service.onArsenal listeners)
@@ -74,9 +79,11 @@ function Service.start()
                     -- PF020: replicated so every client can draw the VIP badge (nameplate, leaderboard, rooms, chat).
                     player:SetAttribute("OpenFrontVIP",packet.vip==true)
                     vipPresence(player) -- PF025: the badge / gold-room attributes follow ownership and the VIP box
-                    -- PF020 G8: Lobby Host+ (the lobby service gates the Host+ settings, lock and kick on it).
-                    player:SetAttribute("OpenFrontHostPlus",type(packet.passes)=="table" and packet.passes.LobbyHostPlus==true)
-                    -- PF020 G1 (PF - 3): CustomFlagService gates saving, equipping and publishing a custom flag on it.
+                    -- PF020 G8: Lobby Host+ (the lobby service gates the Host+ settings, lock and kick on it). Free for every
+                    -- host since 2026-10-27 (LobbyContract.HostPlus.free)
+                    player:SetAttribute("OpenFrontHostPlus",HOST_PLUS_FREE or type(packet.passes)=="table" and packet.passes.LobbyHostPlus==true)
+                    -- PF020 G1 (PF - 3): CustomFlagService gates saving, equipping and publishing a custom flag on it. Off sale since
+                    -- 2026-10-27 (CosmeticCatalog.retiredPasses): an owner keeps it (the snapshot still lists retired passes).
                     player:SetAttribute("OpenFrontCustomFlagPass",type(packet.passes)=="table" and packet.passes.CustomFlag==true)
                 end
                 remote.CosmeticsState:FireClient(player,packet)
@@ -103,7 +110,10 @@ function Service.start()
             end)
         end
     end
-    local function add(player: Player) players[player.UserId]=player; engine:add(player.UserId);confirmPacks(player) end
+    local function add(player: Player)
+        if HOST_PLUS_FREE then player:SetAttribute("OpenFrontHostPlus",true) end -- before the profile loads too
+        players[player.UserId]=player; engine:add(player.UserId);confirmPacks(player)
+    end
     Players.PlayerAdded:Connect(add)
     for _,player in Players:GetPlayers() do add(player) end
     Players.PlayerRemoving:Connect(function(player: Player)

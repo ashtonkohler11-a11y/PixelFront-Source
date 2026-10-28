@@ -117,17 +117,18 @@ function Menu:refresh()
     local pill=shop and shop.body:FindFirstChild("Pill")
     local amount=pill and pill:FindFirstChild("Amount")
     if amount and self.hooks.balance then amount.Text=Menu.balance(self.hooks.balance())end
-    -- Key hints follow the input: Esc on a keyboard, B on a gamepad, none on touch.
-    local touch,pad=self.touch(),self.gamepad()
+    -- Key hints follow the input: B on a gamepad; none on touch, and none on a keyboard (UI audit 2026-10-28, R14: in a match
+    -- Esc opens Roblox's own menu, so an "Esc to close" hint pointed at the wrong menu; the ✕ and the scrim close this one)
+    local pad=self.gamepad()
     local header=panel:FindFirstChild("Header")
     local hint=header and header:FindFirstChild("Hint")
-    if hint then hint.Visible=not touch;hint.Text=if pad then "B to close"else "Esc to close"end
+    if hint then hint.Visible=pad;hint.Text="B to close" end
     local resume=self.rows.Resume
     local keycap=resume and resume.body:FindFirstChild("Keycap")
     if keycap then
-        keycap.Visible=not touch
+        keycap.Visible=pad
         local key=keycap:FindFirstChild("Key")
-        if key then key.Text=if pad then "B"else "Esc"end
+        if key then key.Text="B" end
     end
 end
 

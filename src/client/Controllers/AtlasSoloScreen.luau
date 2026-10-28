@@ -3,7 +3,7 @@
 -- picker) and the match summary, as in M4 and Create Lobby. Centre: THE settings column
 -- (LobbySettingsColumn, shared with Create Lobby and the waiting room). Right: "You'll face" (the
 -- AI nation / tribe counts, the difficulty ladder with yours lit, the custom rules) and Start Game. Start builds the singleplayer config from the
--- same settings (LobbySettingsModel.soloConfig: compact always, nations <= 25, tribes <= 50)
+-- same settings (LobbySettingsModel.soloConfig: compact always, nations <= 25, tribes <= Availability.MaxTribes: 125 from 2026-10-28)
 -- and hands it to the existing Solo start path (context.startSolo). The settings stay as you
 -- left them for the next Solo this session.
 local Tween=game:GetService("TweenService")
@@ -27,7 +27,7 @@ function SoloV2.new(root: Frame,context: any): any
     local back=layer.Top.Back
     for _,b in {back,back:FindFirstChild("PFHit")} do if b then listen((b :: any).Activated,function() if context.back then context.back() end end) end end
     self.start=layer.Canvas.Start;self.caption=layer.Canvas.Caption
-    listen(self.start.Activated,function() self:begin() end)
+    listen(require(script.Parent.HitZone).signal(self.start),function() self:begin() end) -- UI audit R8: its finger zone too
     self:paint()
     return self
 end

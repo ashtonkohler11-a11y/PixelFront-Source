@@ -44,6 +44,14 @@ local MatchService = require(script.Parent.Services.MatchService)
 MatchService.setTutorialRewards(require(script.Parent.Services.CosmeticService).claimTutorialReward,
     require(game:GetService("ReplicatedStorage").Shared.CosmeticCatalog).tutorialReward.amount)
 MatchService.start()
+-- Stats v3 (STATS-SYSTEM-DESIGN v3): the per-player record, the daily totals and the live heartbeat. Guarded: a failure
+-- here only means no stats.
+do local ok,err=pcall(function()
+    require(script.Parent.Services.PlayerProfileService).start({
+        loadProfiles=function() return GlobalLobbyService.isReserved() or game:GetService("RunService"):IsStudio() end,
+        kind=function() return GlobalLobbyService.serverKind() end,
+        matchRunning=function() return GlobalLobbyService.isReserved() and #game:GetService("Players"):GetPlayers()>0 end})
+end);if not ok then warn("[OpenFront] Player records unavailable: "..tostring(err)) end end
 require(script.Parent.Services.TutorialService).start()
 -- Onboarding: a new player's first hub visit starts the tutorial, once ever (its own store; a reserved server re-checks
 -- the mark). Guarded like levels: a failure here only means no auto-start.

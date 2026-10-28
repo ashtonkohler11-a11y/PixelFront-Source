@@ -17,6 +17,17 @@ function Bar.new(root: Instance,context: any): any
     -- the bar's left edge stays right of Roblox's top-bar pill (TopbarLine: the one sanctioned runtime position)
     local okLine,Line=pcall(require,script.Parent:FindFirstChild("TopbarLine") :: any)
     if okLine and Line and Line.keepRight then Line.keepRight(top,self.connections) end
+    -- R1: the title and Stats' scope note scale like desk; Back keeps Roblox's top-bar size
+    if okLine and Line and Line.scaleTitle then Line.scaleTitle(top.Row:FindFirstChild("Title"),self.connections);Line.scaleTitle(top.Right:FindFirstChild("Scope"),self.connections) end
+    -- UI audit build-out (R21): the Inventory tab row's fade + › means "more to the right", so it shows only while there is
+    -- (the Shop bar's rule, AtlasArsenalPage; every Inventory tab fits on desk)
+    local head=top.Row:FindFirstChild("Header");local strip=head and head:FindFirstChild("PFTabs")
+    local cats=strip and strip:FindFirstChild("Categories");local fade=strip and strip:FindFirstChild("PFFade")
+    if cats and fade and cats:IsA("ScrollingFrame") and fade:IsA("GuiObject") then
+        local function more() fade.Visible=cats.AbsoluteCanvasSize.X-cats.AbsoluteWindowSize.X-cats.CanvasPosition.X>8 end
+        for _,p in {"CanvasPosition","AbsoluteCanvasSize","AbsoluteWindowSize"} do listen(cats:GetPropertyChangedSignal(p),more) end
+        task.defer(more)
+    end
     local scope=context.statsScope
     if scope then listen(scope:GetPropertyChangedSignal("Text"),function() self:paint() end) end
     return self

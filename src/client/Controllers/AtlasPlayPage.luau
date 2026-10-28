@@ -27,7 +27,7 @@ local MAP_DESCRIPTIONS = {
 }
 local MODIFIERS = {
     {"isRandomSpawn", "Random spawn"}, {"isCrowded", "Crowded"}, {"isHardNations", "Hard nations"},
-    {"isAlliancesDisabled", "No alliances"}, {"isNukesDisabled", "No nukes"}, {"isSAMsDisabled", "No SAMs"},
+    {"isAlliancesDisabled", "No alliances"}, {"isNukesDisabled", "No nukes"}, {"isSAMsDisabled", "No SAM Launchers"}, -- the build dock's name (R21)
     {"isPeaceTime", "4-minute peace"}, {"isWaterNukes", "Water nukes"}, {"isDoomsdayClock", "Doomsday clock"},
 }
 local function finite(value: any): boolean
@@ -554,7 +554,9 @@ function Page:open(kind: string, title: string, message: string)
     body.Cancel.Text = if kind == "pending" then "Cancel joining" else "Back"
     self:setBackgroundInput(false)
     if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(self.root) then GuiService.SelectedObject = self.dialogClose end
-    self:layout(); self.root:SetAttribute("ModalOpen", true)
+    -- UI audit (PF - 3, 2026-10-28): PF044's main screen replaced this page, which now stays hidden but still follows the
+    -- joins; a hidden "Could not join" dialog flagged ModalOpen and the menu ignored every Home key. Only a shown page blocks.
+    self:layout(); self.root:SetAttribute("ModalOpen", self.visible)
 end
 
 function Page:close()
@@ -803,6 +805,7 @@ end
 function Page:setVisible(visible: boolean, hold: boolean?)
     if self.destroyed then return end
     self.visible = visible; self.root.Visible = visible
+    self.root:SetAttribute("ModalOpen", visible and self.layer.Visible) -- (a dialog behind a hidden page never blocks the menu)
     self.holdThumbnails = not visible and hold == true -- PF031: a tab switch keeps the map previews (updateThumbnails)
     self:setBackgroundInput(visible and not self.layer.Visible)
     if not visible then

@@ -16,9 +16,9 @@ function GameConfig.forState(state: any): any
     result.Match.GameType=raw.gameType or "Singleplayer"
     result.Match.SpawnImmunityTicks=raw.spawnImmunityDuration or Base.Match.SpawnImmunityTicks
     result.Match.HardTimeLimitSeconds=if raw.maxTimerValue then raw.maxTimerValue*60 else Base.Match.HardTimeLimitSeconds
-    -- PF030: the spawn phase's length; only the tutorial sets one (10 s, 2026-10-13); everything else keeps Config's 30
+    -- PF030: the spawn phase's length; a match may set its own (5 s up to SpawnPhaseMaxSeconds), else Config's 15
     result.Match.SpawnPhaseSeconds=if type(raw.spawnPhaseSeconds)=="number" and raw.spawnPhaseSeconds==raw.spawnPhaseSeconds
-        then math.clamp(math.floor(raw.spawnPhaseSeconds),5,Base.Match.SpawnPhaseSeconds) else Base.Match.SpawnPhaseSeconds
+        then math.clamp(math.floor(raw.spawnPhaseSeconds),5,Base.Match.SpawnPhaseMaxSeconds) else Base.Match.SpawnPhaseSeconds
     result.Bot.Count=raw.bots
     result.Nations.Enabled=raw.nations~="disabled"
     result.Economy.StartingGold=raw.startingGold or 0

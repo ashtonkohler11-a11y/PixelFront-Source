@@ -61,6 +61,7 @@ local rejoins: any=nil -- PF036 rejoin tickets on the lobby map: {get, set, remo
 local lobbies,lobbiesAt,lobbiesLoading=nil,-math.huge,false
 local lobbyWaiters={}
 local manifest,runtime,mapAsset,matchId -- reserved match server
+local hostedKind: string? = nil -- reserved: this server's own Solo/Tutorial ticket kind ("solo" | "tutorial"), for fromKind
 local levelsApi: any=nil -- PF023: LevelsService.api (Main, through setLevels); handed to the public match runtime
 local hostedHandler,hostedUsed=nil,false -- reserved: MatchService runs one Solo/Tutorial player here
 local rankedHooks: any={} -- Ranked v2 (RankedService): activity(player) on hubs, runtime(frozen, runtime) on match servers
@@ -99,6 +100,8 @@ local function errorCode(why:any):string
 end
 
 function Service.isReserved():boolean return reserved end
+-- stats v3 live heartbeat (PlayerProfileService): this server's kind ("hub", or the ticket kind: solo / tutorial / public / ranked)
+function Service.serverKind():string return if not reserved then "hub" else (hostedKind or (manifest and manifest.kind) or "match") end
 local function isHosted(kind:any):boolean return kind==Kinds.Solo or kind==Kinds.Tutorial end
 -- Every teleport of ours goes through here. PF034: each player is marked first, so their PlayerRemoving reads as a server
 -- hop and not as quitting the game; a call that throws clears the marks and rethrows (TeleportInitFailed clears too).
@@ -148,7 +151,7 @@ local function identity(player:Player):any
         -- PF020: set by CosmeticService from the pass. PF025: the badge honours the VIP box ("VIP badge" Hide) and the
         -- gold room ("Gold lobbies" off); both attributes are false for non-VIPs.
         vip=player:GetAttribute("OpenFrontVIPBadge")==true,gold=player:GetAttribute("OpenFrontVIPGold")==true,
-        hostPlus=player:GetAttribute("OpenFrontHostPlus")==true, -- PF020 G8: Lobby Host+ (pass or profile)
+        hostPlus=Contract.HostPlus.free==true or player:GetAttribute("OpenFrontHostPlus")==true, -- PF020 G8: Lobby Host+ (free since 2026-10-27)
         customFlag=customFlag(player), -- PF020 G1: the Flag Forge code (CustomFlagService sets the attribute)
         party=s and s.partyId} -- PF044: party partners start their match allied (PartyAllies)
 end
@@ -487,7 +490,7 @@ local function serviceParty(pc:any)
         local locals={}
         for player in pc.members do
             local s=sessions[player]
-            if s then locals[tostring(player.UserId)]={state=partyState(s,pc.record)}end
+            if s then locals[tostring(player.UserId)]={state=partyState(s,pc.record),hub=if reserved or studio then nil else job}end
         end
         for uid in pc.fakes do locals[uid]={state="idle"}end
         local ok,renewed,why=call(true,parties.renew,parties,pc.id,locals)
@@ -812,6 +815,8 @@ handlers.PartyJoin=function(player:Player,s:any,request:any)
     local ok,p,why=call(true,parties.join,parties,request.code,identity(player))
     if not ok or not p or why~=nil then lobbyError(player,"PartyJoin",errorCode(if ok then why else "StoreBusy"));return end
     partyAttach(player,p);partyNudge(p)
+    -- stats: an accepted invite (through the invite link's launch data, else the hub notice or a typed code)
+    pcall(function()require(script.Parent.PlayerProfileService).invite(if s.partyLink then "link" else "code")end)
 end
 handlers.PartyLeave=function(player:Player,s:any)
     if not s.partyId then sendParty(player);return end
@@ -849,6 +854,7 @@ handlers.PartyInvited=function(player:Player,s:any,request:any)
         end
     end
     if #to==0 then return end
+    pcall(function()require(script.Parent.PlayerProfileService).invite("sent",#to)end) -- stats: friends invited
     local data={to=to,hub=job,partyId=pc.id,code=pc.record.code,size=Parties.size(pc.record),from={userId=player.UserId,name=player.DisplayName}}
     deliverInvite(data)
     if not studio then task.spawn(function()pcall(function()Messaging:PublishAsync(INVITES,data)end)end)end
@@ -915,7 +921,18 @@ function Service.startHosted(player:Player,kind:string,config:any,ports:any):(bo
     if cache then detach(player,cache,Reasons.Left)end
     task.spawn(function()
         if roomId then pcall(releaseSeat,roomId,player.UserId)end
-        pcall(ports.phase,Phases.Teleporting,"Starting your match…")
+        -- MM 2026-10-27 (Ashton: "I queued solo as a party member and it never said I left the party"): a Solo/Tutorial
+        -- start leaves a party of two or more (the lead passes on); the others' Party packets drop the seat, the
+        -- player's own says left = the kind, and the start says so. A party of just you stays (away) for the trip home.
+        local pc=s.partyId and parties and partyCaches[s.partyId]
+        local left=pc~=nil and Parties.size(pc.record)>1
+        if left then
+            local ok,p=call(true,parties.leave,parties,player.UserId)
+            partyDetach(player);send(player,{kind=Packets.Party,party=nil,left=kind})
+            if ok then partyWrote(p)end
+            if s.hosted~=h then return end
+        end
+        pcall(ports.phase,Phases.Teleporting,if left then "You left your party. Starting your match…" else "Starting your match…")
         -- Reserve outside every store transform: transforms can replay.
         local reservedOk,accessCode,serverId=pcall(function()return Teleport:ReserveServerAsync(game.PlaceId)end)
         if s.hosted~=h then return end
@@ -958,15 +975,28 @@ local function returnFailed(player:Player,s:any,attempt:number?)
 end
 -- requeueRoom (PF043 hybrid queue): a public room this player already holds a seat in; their hub picks the seat up on
 -- arrival (renews it, shows the queued card, teleports at the start).
-local function hubTeleport(player:Player,requeueRoom:string?)
+-- untargeted: skip the party's hub (its retry after a targeted trip failed, e.g. that hub is full).
+local function hubTeleport(player:Player,requeueRoom:string?,untargeted:boolean?)
     local s=sessions[player];if not s then return end
     if studio then lobbyError(player,"Return","Unknown","Teleports need the Roblox app.");return end
     local options=Instance.new("TeleportOptions")
-    local transaction={nonce=Http:GenerateGUID(false),attempt=s.attempt};s.returning=transaction
-    options:SetTeleportData({returnNonce=transaction.nonce,requeueRoom=requeueRoom})
+    local transaction={nonce=Http:GenerateGUID(false),attempt=s.attempt,requeueRoom=requeueRoom};s.returning=transaction
+    -- MM 2026-10-27 (bug: parties split on the way home, each member landing on whatever hub Roblox picked): a party
+    -- member goes to the hub where the party already sits
+    if not untargeted and parties then
+        local okParty,p=call(false,parties.find,parties,player.UserId)
+        if s.returning~=transaction or player.Parent~=Players then return end
+        local hub=okParty and type(p)=="table"and Parties.homeHub(p,player.UserId,now(),job)or nil
+        if hub then options.ServerInstanceId=hub;transaction.targeted=true end
+    end
+    -- fromKind (PF - 1, MM UX fix #3: the hub's Daily sheet opens on the way back from a match, never after the tutorial):
+    -- this server's match kind, Contract.Kinds ("public" | "custom" | "solo" | "tutorial"); nil before any match
+    options:SetTeleportData({returnNonce=transaction.nonce,requeueRoom=requeueRoom,fromKind=hostedKind or (manifest and manifest.kind) or nil})
     local ok=pcall(function()teleport({player},options)end)
     if not ok and s.returning==transaction then
-        s.returning=nil;returnFailed(player,s,transaction.attempt)
+        s.returning=nil
+        if transaction.targeted then hubTeleport(player,requeueRoom,true);return end
+        returnFailed(player,s,transaction.attempt)
     end
 end
 -- Reserved: MatchService sends a Solo/Tutorial player home (Exit). failed() runs if the teleport fails.
@@ -1015,7 +1045,7 @@ local function arriveHosted(player:Player,s:any,data:any,join:any)
         warn(string.format("[OpenFront] Hosted arrival refused [%s] for %d",code,player.UserId))
         lobbyError(player,"Join","Started",Contract.Errors.MatchFailed);hubTeleport(player);return
     end
-    hostedUsed=true;matchId=data.id;s.hosted=true
+    hostedUsed=true;matchId=data.id;s.hosted=true;hostedKind=if type(data.kind)=="string" then data.kind else nil
     local ok,began=pcall(hostedHandler,player,data.kind,if type(data.config)=="table"then Coordinator.clone(data.config)else nil)
     if ok and began==true then print(string.format("[OpenFront] Hosted %s: started for %d",data.kind,player.UserId));return end
     warn(string.format("[OpenFront] Hosted arrival refused [%s] for %d: %s",if ok then "START" else "ERROR",player.UserId,tostring(began)))
@@ -1376,7 +1406,7 @@ local function add(player:Player)
             local okFind,p=call(false,parties.find,parties,player.UserId)
             if okFind and p and sessions[player]==s then partyAttach(player,p)end
             local partyInvite=Parties.normalizeCode(okData and type(data)=="table"and data.LaunchData or nil)
-            if partyInvite and sessions[player]==s and not s.roomId then s.last.PartyJoin=now();handlers.PartyJoin(player,s,{kind="PartyJoin",code=partyInvite})end
+            if partyInvite and sessions[player]==s and not s.roomId then s.last.PartyJoin=now();s.partyLink=true;handlers.PartyJoin(player,s,{kind="PartyJoin",code=partyInvite});s.partyLink=nil end
         end
         -- PF036 rejoin: a match you dropped out of is still going
         if sessions[player]==s and rejoins then
@@ -1678,8 +1708,10 @@ function Service.start()
                 return
             end
             if type(data)=="table"and s.returning and data.returnNonce==s.returning.nonce then
-                local attempt=s.returning.attempt;s.returning=nil
-                returnFailed(player,s,attempt)
+                local transaction=s.returning;s.returning=nil
+                -- the party's hub refused (full, closing): home anyway, to any hub
+                if transaction.targeted then hubTeleport(player,transaction.requeueRoom,true);return end
+                returnFailed(player,s,transaction.attempt)
             end
             return
         end

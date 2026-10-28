@@ -214,7 +214,7 @@ function V2:paintBoard()
     local empty = find(canvas, "Week.Empty")
     if empty then
         empty.Visible = #v.rows == 0
-        copy(empty, if v.status == "loading" then "Loading this week's boards…" else "No results yet this week. Win a match to lead it.")
+        copy(empty, if v.status == "loading" then "Loading this week's boards…" else "No results yet this week." --[[ UI audit build-out (R5): the You row already says how to get on it ]])
     end
 end
 

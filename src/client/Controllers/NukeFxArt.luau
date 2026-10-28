@@ -102,7 +102,9 @@ local function step()
     local now=os.clock()
     for target,record in bound do
         if not shown(target) then continue end
-        local index=if reduced(target) then math.floor(Art.FRAMES*.82) else math.floor(now/Art.LOOP*Art.FRAMES)%Art.FRAMES
+        -- UI audit (PF - 4, R12: the Missiles tab's four previews showed the same red disc in sync): each item runs its loop
+        -- from its own phase (record.offset frames in), so a row shows four different moments
+        local index=if reduced(target) then math.floor(Art.FRAMES*.82) else (math.floor(now/Art.LOOP*Art.FRAMES)+record.offset)%Art.FRAMES
         if index~=record.index then
             record.index=index
             record.image:WritePixelsBuffer(Vector2.zero,Vector2.new(W,H),record.frames[index+1])
@@ -120,7 +122,8 @@ function Art.bind(target: ImageLabel,id: string)
     image:WritePixelsBuffer(Vector2.zero,Vector2.new(W,H),list[math.floor(Art.FRAMES*.82)+1])
     target.ImageContent=Content.fromObject(image);target.ImageColor3=Color3.new(1,1,1)
     target.ResampleMode=Enum.ResamplerMode.Pixelated;target.ScaleType=Enum.ScaleType.Fit;target.Visible=true
-    local record={image=image,frames=list,index=-1}
+    local seed=0;for i=1,#id do seed=(seed*31+string.byte(id,i))%1000003 end
+    local record={image=image,frames=list,index=-1,offset=(seed*7)%Art.FRAMES}
     record.gone=target.Destroying:Connect(function() Art.unbind(target) end)
     bound[target]=record
     if not driver then driver=RunService.Heartbeat:Connect(step) end

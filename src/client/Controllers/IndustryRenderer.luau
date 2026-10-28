@@ -9,6 +9,7 @@ local Graphics=require(game:GetService("ReplicatedStorage").Shared.OpenFrontGrap
 local GraphicsMath=require(script.Parent.GraphicsRenderMath)
 local Diplomacy=require(game:GetService("ReplicatedStorage").Shared.OpenFrontDiplomacy)
 local SpriteFx=require(script.Parent.SpriteFxRenderer)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local Vfx=require(game:GetService("ReplicatedStorage").Shared.PixelFrontVfxPolicy)
 local Renderer={}
 Renderer.__index=Renderer
@@ -508,14 +509,14 @@ function Renderer:draw(zoom: number,viewport: Frame,_hoverOwner: number?)
     local railStarted=Performance.start()
     if railStarted then debug.profilebegin("IndustryRenderer.railMaintenance") end
     self.effectTime=os.clock()-self.started
-    local offset=self.world.AbsolutePosition-viewport.AbsolutePosition
+    local offset=if okGeo then Geo.offset(self.world,viewport) else self.world.AbsolutePosition-viewport.AbsolutePosition
     local fade=Renderer.railFade(zoom,self.graphics.railroad)*self.graphics.railroad.railAlpha
     local rasterZoom=Renderer.railRasterZoom(zoom,self.graphics.railroad.railDetailZoom)
     local effectRevision=self.effects and self.effects.revision or 0
     local effectStamp=if Vfx.enabled(self.graphics.vfx,"train") and self.effects and (if self.effects.hasAny then self.effects:hasAny("railroad") else self.effects:has("railroad")) then math.floor(self.effectTime*6) else 0
     self.drawSerial+=1
     self.railQueue=self.railQueue or {};self.railQueueCursor=self.railQueueCursor or 1;self.recolorQueue=self.recolorQueue or {}
-    local viewportSize=viewport.AbsoluteSize
+    local viewportSize=if okGeo then Geo.viewportSize(viewport) else viewport.AbsoluteSize
     local project=self.lastRailZoom~=zoom or self.lastRailOffset~=offset or self.lastRailViewport~=viewportSize or self.lastRailPass~=self.graphics.passEnabled.railroad or self.lastRailFade~=fade or self.lastRailChunkRevision~=self.chunkRevision
     local function enqueue(chunk: any)
         chunk.targetRasterZoom=rasterZoom
@@ -604,7 +605,7 @@ function Renderer:draw(zoom: number,viewport: Frame,_hoverOwner: number?)
     if trainStarted then debug.profilebegin("IndustryRenderer.trainDraw") end
     local w=self.state.map.width
     local trainEffectFrame=if Vfx.enabled(self.graphics.vfx,"train") and self.effects and (if self.effects.hasAny then self.effects:hasAny("train") else self.effects:has("train")) then math.floor(self.effectTime*15) else 0
-    local redrawTrains=self.lastTrainState~=self.state or self.lastTrainZoom~=zoom or self.lastTrainOffset~=offset or self.lastTrainViewport~=viewport.AbsoluteSize or self.lastTrainAlt~=self.altView or self.lastTrainGraphics~=self.graphics or self.lastTrainEffects~=self.effects or self.lastTrainEffectFrame~=trainEffectFrame or self.lastTrainEffectRevision~=effectRevision
+    local redrawTrains=self.lastTrainState~=self.state or self.lastTrainZoom~=zoom or self.lastTrainOffset~=offset or self.lastTrainViewport~=viewportSize or self.lastTrainAlt~=self.altView or self.lastTrainGraphics~=self.graphics or self.lastTrainEffects~=self.effects or self.lastTrainEffectFrame~=trainEffectFrame or self.lastTrainEffectRevision~=effectRevision
     if redrawTrains then
     self.trainTintSerial+=1
     local serial=self.trainTintSerial
@@ -676,7 +677,7 @@ function Renderer:draw(zoom: number,viewport: Frame,_hoverOwner: number?)
     end
     Performance.count("IndustryRenderer.trainEligible",eligible);Performance.count("IndustryRenderer.trainProjected",projected)
     Performance.count("IndustryRenderer.trainTintChanges",tinted);Performance.count("IndustryRenderer.trainOwnerColors",ownerColors)
-    self.lastTrainState=self.state;self.lastTrainZoom=zoom;self.lastTrainOffset=offset;self.lastTrainViewport=viewport.AbsoluteSize;self.lastTrainAlt=self.altView;self.lastTrainGraphics=self.graphics;self.lastTrainEffects=self.effects;self.lastTrainEffectFrame=trainEffectFrame;self.lastTrainEffectRevision=effectRevision
+    self.lastTrainState=self.state;self.lastTrainZoom=zoom;self.lastTrainOffset=offset;self.lastTrainViewport=viewportSize;self.lastTrainAlt=self.altView;self.lastTrainGraphics=self.graphics;self.lastTrainEffects=self.effects;self.lastTrainEffectFrame=trainEffectFrame;self.lastTrainEffectRevision=effectRevision
     end
     if trainStarted then debug.profileend() end
     Performance.finish("IndustryRenderer.trainDraw",trainStarted)

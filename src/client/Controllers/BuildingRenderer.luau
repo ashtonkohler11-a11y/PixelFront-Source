@@ -12,6 +12,13 @@ local IconStorage=game:GetService("ReplicatedStorage"):FindFirstChild("OpenFront
 -- Soft: without it (harnesses, before the sheets exist) the composed plate + glyph draws as before.
 local Sprites: any=nil
 do local ok,result=pcall(function() return require((game :: any):GetService("ReplicatedStorage").Shared.BuildingSprites) end);if ok then Sprites=result end end
+-- PF - 4 building animations (Ashton 2026-10-27): a site rises in its owner's colours, paced by construction, then lands
+-- (BuildAnim). Soft: without it, the grey plate + progress bar as before.
+local okAnim,BuildAnim=pcall(require,script.Parent.BuildAnim)
+local okAnimMath,BuildAnimMath=pcall(require,script.Parent.BuildAnimMath)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
+local PB:(string)->(),PE:()->()=(debug :: any).profilebegin or function(_: string) end,(debug :: any).profileend or function() end -- microprofile labels (no-ops outside Roblox)
+local ANIM=okAnim and okAnimMath
 local Renderer={}
 Renderer.__index=Renderer
 local function invalidateDraw(self: any)
@@ -215,7 +222,7 @@ function Renderer:update(state: any,colors: any,palettes: any)
         end
     end
     for id,r in self.pool do if not seen[id] then r.ui:Destroy();self.pool[id]=nil end end
-    self.industry:update(state,colors,palettes)
+    PB("PF.Cities.Industry");self.industry:update(state,colors,palettes);PE()
 end
 -- PF020 (Ashton's late game: ~100+ ms a frame with an effect-equipped empire). A structure effect
 -- is drawn from frames shared by every building of a kind (RenderEffects.paintShared, one paint per
@@ -265,8 +272,9 @@ function Renderer:paint(r: any,city: any,zoom: number,position: Vector2,alpha: n
         local friendly,embargo=GraphicsMath.relationship(self.state,1,city.owner)
         color=GraphicsMath.affiliation(self.graphics,city.owner==1,friendly,embargo,true);border=color
     end
-    local fill=if city.underConstruction then Color3.fromRGB(198,198,198) else multiply(color,structure.fillDarken)
-    border=if city.underConstruction then Color3.fromRGB(127,127,127) else multiply(border,structure.borderDarken)
+    local grey=city.underConstruction and not ANIM -- PF - 4: an animated site keeps its owner colours (it rises instead)
+    local fill=if grey then Color3.fromRGB(198,198,198) else multiply(color,structure.fillDarken)
+    border=if grey then Color3.fromRGB(127,127,127) else multiply(border,structure.borderDarken)
     local glyphColor=Color3.new(structure.iconR,structure.iconG,structure.iconB)
     if structure.iconDarken>0 and fill.R*.299+fill.G*.587+fill.B*.114>=.25 then glyphColor=multiply(fill,structure.iconDarken) end
     if tint then fill=fill:Lerp(tint,.5);border=border:Lerp(tint,.5);glyphColor=glyphColor:Lerp(tint,.5) end
@@ -334,6 +342,13 @@ function Renderer:paint(r: any,city: any,zoom: number,position: Vector2,alpha: n
     end
     local progress=Renderer.progress(city,self.state.ticks)
     r.dynamic=progress~=nil
+    -- PF - 4: a real map record (not the placement ghost / upgrade preview) animates its construction; its bar hides
+    local animated=ANIM and alpha==1 and r~=self.ghost and r~=self.upgrade
+    if animated then
+        (BuildAnim :: any).site(r.ui,r.art,if city.underConstruction then progress else nil,
+            {premium=false,mine=city.owner==1,fresh=(BuildAnimMath :: any).fresh(city.createdTick,self.state.ticks),px=size})
+        if city.underConstruction then progress=nil end
+    end
     r.bar.Visible=progress~=nil and alpha==1
     if progress then
         local barWidth=math.clamp(size*.8,18,52);local barHeight=math.clamp(size*.09,3,5)
@@ -360,8 +375,8 @@ function Renderer:paint(r: any,city: any,zoom: number,position: Vector2,alpha: n
 end
 function Renderer:draw(zoom: number,viewport: Frame)
     if not self.state then return end
-    local offset=self.world.AbsolutePosition-viewport.AbsolutePosition
-    local viewportSize=viewport.AbsoluteSize
+    local offset=if okGeo then Geo.offset(self.world,viewport) else self.world.AbsolutePosition-viewport.AbsolutePosition
+    local viewportSize=if okGeo then Geo.viewportSize(viewport) else viewport.AbsoluteSize
     local effects=self.effects
     local equipped=effects~=nil and (if effects.hasAny then effects:hasAny("structures") else effects:has("structures"))
     local effectRevision=if effects then effects.revision else nil
@@ -433,8 +448,9 @@ function Renderer:drawGhost(zoom: number,position: Vector2,query: any,multiplier
         if not self.crosshairBound then Icons.bind(self.crosshair,"WarshipCrosshair");self.crosshairBound=true end
         self.crosshair.ImageColor3=if query.canBuild~=false then Color3.new(.9,.15,.15) else Color3.new(.4,.1,.1)
         self.crosshair.Position=UDim2.fromOffset(position.X,position.Y);self.crosshair.Visible=true
+        -- the cost sits above the ghost, the "xN" above that (UI audit 2026-10-28: below it, it covered your nation's name)
         self.cost.Text=formatNumber(query.cost);self.cost.TextColor3=if self.state.gold[1]<query.cost then Color3.new(1,.3,.3) elseif not canPlace then Color3.new(.6,.6,.6) else Color3.new(1,1,1)
-        self.cost.Position=UDim2.fromOffset(position.X,position.Y+25);self.cost.Visible=query.cost>0 and (not self.preferences or self.preferences:get("cursorCostLabel"))
+        self.cost.Position=UDim2.fromOffset(position.X,position.Y-25);self.cost.Visible=query.cost>0 and (not self.preferences or self.preferences:get("cursorCostLabel"))
         return
     end
     if kind=="AtomBomb" or kind=="HydrogenBomb" then
@@ -466,8 +482,8 @@ function Renderer:drawGhost(zoom: number,position: Vector2,query: any,multiplier
         self.range.Visible=true;self.range.Position=UDim2.fromOffset(position.X,position.Y);self.range.Size=UDim2.fromOffset((radius+1)*2*zoom,(radius+1)*2*zoom)
         local cost=query.cost*multiplier;local affordable=self.state.gold[1]>=cost and (kind~="AtomBomb" or (query.readyMissileCount or 0)>=multiplier)
         local color=if not affordable then Color3.new(1,.3,.3) elseif not canPlace then Color3.new(.6,.6,.6) else Color3.new(1,1,1)
-        self.cost.Text=formatNumber(cost);self.cost.TextColor3=color;self.cost.Position=UDim2.fromOffset(position.X,position.Y+25);self.cost.Visible=cost>0 and (not self.preferences or self.preferences:get("cursorCostLabel"))
-        self.amount.Text="x"..multiplier;self.amount.TextColor3=color;self.amount.Position=UDim2.fromOffset(position.X,position.Y-30);self.amount.Visible=multiplier>1
+        self.cost.Text=formatNumber(cost);self.cost.TextColor3=color;self.cost.Position=UDim2.fromOffset(position.X,position.Y-25);self.cost.Visible=cost>0 and (not self.preferences or self.preferences:get("cursorCostLabel"))
+        self.amount.Text="x"..multiplier;self.amount.TextColor3=color;self.amount.Position=UDim2.fromOffset(position.X,position.Y-45);self.amount.Visible=multiplier>1
         return
     end
     self.crosshair.Visible=false
@@ -497,7 +513,7 @@ function Renderer:drawGhost(zoom: number,position: Vector2,query: any,multiplier
     self.industry:setGhost(query)
     local cost=if upgrade and query.upgradeCosts then query.upgradeCosts[multiplier] or query.cost else query.cost
     local color=if self.state.gold[1]<cost then Color3.new(1,.3,.3) elseif not canPlace then Color3.new(.6,.6,.6) else Color3.new(1,1,1)
-    self.cost.Text=formatNumber(cost);self.cost.TextColor3=color;self.cost.Position=UDim2.fromOffset(position.X,position.Y+25);self.cost.Visible=cost>0 and (not self.preferences or self.preferences:get("cursorCostLabel"))
-    self.amount.Text="x"..multiplier;self.amount.TextColor3=color;self.amount.Position=UDim2.fromOffset(position.X,position.Y-30);self.amount.Visible=multiplier>1
+    self.cost.Text=formatNumber(cost);self.cost.TextColor3=color;self.cost.Position=UDim2.fromOffset(position.X,position.Y-25);self.cost.Visible=cost>0 and (not self.preferences or self.preferences:get("cursorCostLabel"))
+    self.amount.Text="x"..multiplier;self.amount.TextColor3=color;self.amount.Position=UDim2.fromOffset(position.X,position.Y-45);self.amount.Visible=multiplier>1
 end
 return Renderer

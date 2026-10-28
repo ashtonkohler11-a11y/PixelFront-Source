@@ -58,7 +58,7 @@ function Commands.apply(state:any,actor:number,r:any,issuedDuringChoosing:boolea
     elseif k=="QuickChat"then return Simulation.quickChatCommand(state,actor,r)
     elseif k=="BuildPremium"then return Premium.build(state,actor,r.unitType,r.targetId)
     elseif k=="LaunchPremium"then return Premium.launch(state,actor,r.unitType,r.targetId)
-    elseif k=="UsePremium"then return Premium.use(state,actor,r.unitType) -- reshuffle: Train (training_camp) / Invest (stock_exchange)
+    elseif k=="UsePremium"then return Premium.use(state,actor,r.unitType,r.amount) -- reshuffle: Train (training_camp) / Invest (stock_exchange; amount = PF - 3's pick)
     elseif k=="Build"then
         if r.unitType=="City"then return Simulation.buildCity(state,actor,r.targetId)
         elseif r.unitType=="Port"then return Simulation.buildPort(state,actor,r.targetId)

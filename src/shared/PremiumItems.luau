@@ -40,14 +40,16 @@ local function ensure(state: any): any
     local p=state.premium
     if p then return p end
     p={owned={},buildings={},counts={},nextId=1,version=0,stats={},yards={},shelled={},guilds={},
-        projectiles={},events={},nextEvent=1,airdropAt={},fx={},nextFx=1,
+        projectiles={},events={},nextEvent=1,airdropAt={},fx={},nextFx=1,drops={},
         barracks={},momentum={},scale={},shells={},wardenHit={},trainedAt={},earn={},
-        tick=M.tick,conquered=M.conquered,growth=M.growth,tradeGold=M.tradeGold,tradeSafe=M.tradeSafe}
+        guildSaves={},tick=M.tick,conquered=M.conquered,growth=M.growth,tradeGold=M.tradeGold,tradeSafe=M.tradeSafe,guildSaved=M.guildSaved,
+        dropSafe=M.dropSafe}
     state.premium=p
     return p
 end
 -- PF - 4 in-match FX (presentation only): what a building just did, with exact tiles, for the client's effects
 -- {id, tick, kind = zap / shell / warden_fire / warden, owner, from?, tile, victim?, amount, pct? (per mille), coil?, land?}
+-- guild_save (PF - 4's contract): {owner = the trade ship's owner, ship = its id, tile, by = the warship's owner}
 local FX_KEPT=24
 local function emit(state: any,p: any,entry: any)
     entry.id=p.nextFx;p.nextFx+=1;entry.tick=state.ticks
@@ -367,9 +369,22 @@ local function land(state: any,p: any,shot: any)
         else
             state.navalApi.conquer(shot.to,owner)
             table.insert(state.pendingExecutions,{kind="Attack",owner=owner,targetOwner=target,amount=shot.troops,sourceTile=shot.to,removeTroops=false})
+            p.drops=p.drops or {};p.drops[owner]={tile=shot.to,at=state.ticks} -- dropSafe: its pocket fights first
         end
         event(p,{kind="airdrop",item="airdrop",owner=owner,tile=shot.to,landed=not blocked})
     end
+end
+-- 2026-10-28 (run-pf044-premium caught it): an Airdrop lands as a one-tile pocket inside enemy land, and the cluster update
+-- (Simulation: encircled pockets are annexed) could take it back the next tick, before its troops had moved: a paid drop
+-- that did nothing. The pocket isn't annexed while its own fight runs: the landing attack (sourceTile = the drop) is active,
+-- or it landed under 1 s ago (that attack launches from the next tick's queue). After that the normal rule applies.
+function M.dropSafe(state: any,owner: number): boolean
+    local p=state.premium;local drop=p and p.drops and p.drops[owner]
+    if not drop then return false end
+    if state.ticks-drop.at<=TICKS_PER_SECOND then return true end
+    for _,a in state.attacks do if a.active and a.owner==owner and a.sourceTile==drop.tile then return true end end
+    p.drops[owner]=nil
+    return false
 end
 -- fly every projectile one tick: enemy SAMs in range shoot it (their normal reload), arrivals land
 local function flyProjectiles(state: any,p: any)
@@ -452,16 +467,22 @@ local function trainOffer(state: any,owner: number): (number,number)
 end
 -- Stock Exchange: what a tap invests now and what it would return (stake, payout); income = the last StakeSeconds of
 -- earned gold (Exchange payouts and raids left out, so a payout never feeds the next stake)
+-- the profit share a stake earns now ((Return - 1) x the IndustryRamp); the packet's invest option carries it as `gain`, so
+-- the client's "You get back" for a picked amount is stake + floor(stake x gain), exactly as here
+local function investGain(state: any): number
+    return (MATCH.stock_exchange.Return-1)*industryRamp(state)
+end
 local function investOffer(state: any,p: any,owner: number): (number,number)
     local S=MATCH.stock_exchange
     local ring=p.earn[owner]
     local income=if ring and #ring>=2 then math.max(0,(ring[#ring]-ring[1])/(#ring-1)) else 0
     local stake=math.floor(math.min(income*S.StakeSeconds,S.StakeCap,state.gold[owner]))
     if stake<=0 then return 0,0 end
-    return stake,stake+math.floor(stake*(S.Return-1)*industryRamp(state))
+    return stake,stake+math.floor(stake*investGain(state))
 end
--- Train / Invest (UsePremium): one tap, no target
-function M.use(state: any,owner: number,itemId: any): (boolean,string)
+-- Train / Invest (UsePremium): one tap, no target. amount (Invest only; PF - 3's pick, Ashton's "pick amount"): the gold to
+-- stake, floored and clamped to 1..the max allowed now (investOffer); nil = the max
+function M.use(state: any,owner: number,itemId: any,amount: any?): (boolean,string)
     if itemId~="training_camp" and itemId~="stock_exchange" then return false,"Unknown premium action." end
     if M.banned(state,itemId) then return false,BANNED end
     if state.phase~="Playing" or (state.counts[owner] or 0)<=0 then return false,"Wait for the match to start." end
@@ -482,6 +503,11 @@ function M.use(state: any,owner: number,itemId: any): (boolean,string)
     if b.invest then return false,"Already invested." end
     local stake,payout=investOffer(state,p,owner)
     if stake<=0 then return false,"Nothing to invest yet." end
+    if amount~=nil then
+        if type(amount)~="number" or amount~=amount or math.abs(amount)==math.huge then return false,"Pick an amount." end
+        stake=math.clamp(math.floor(amount),1,stake)
+        payout=stake+math.floor(stake*investGain(state))
+    end
     state.gold[owner]-=stake;s.invested+=stake
     b.invest={stake=stake,payout=payout,started=state.ticks,ends=state.ticks+MATCH.stock_exchange.Seconds*TICKS_PER_SECOND,risk=false}
     event(p,{kind="invest",item="stock_exchange",owner=owner,tile=b.tile,stake=stake,payout=payout,ends=b.invest.ends})
@@ -564,8 +590,12 @@ function M.tick(state: any)
             if state.ticks>b.built and (state.ticks-b.built)%(MATCH.warden.EverySeconds*TICKS_PER_SECOND)==0 then wardenFire(state,p,b) end
         elseif b.item=="barracks" then barracks[b.owner]=true
         elseif b.item=="bank" then
-            local perTick=MATCH.bank.GoldPerSecond*industryRamp(state)/TICKS_PER_SECOND
-            addGold(state,b.owner,perTick);local s=stats(p,b.owner);s.minted+=perTick
+            -- whole gold only (crash fix 2026-10-27): during the IndustryRamp the per-tick share is fractional, and the wire
+            -- codec rejects a fractional goldEarned (MatchTransport "Invalid source goldEarned" stopped the match); the
+            -- remainder carries on the building, so the total paid is unchanged
+            b.carry=(b.carry or 0)+MATCH.bank.GoldPerSecond*industryRamp(state)/TICKS_PER_SECOND
+            local perTick=math.floor(b.carry);b.carry-=perTick
+            if perTick>0 then addGold(state,b.owner,perTick);local s=stats(p,b.owner);s.minted+=perTick end
         elseif b.item=="engineering_yard" then yards[b.owner]=true
         elseif b.item=="tax_office" then taxes[b.owner]=true
         elseif b.item=="trade_guild" then guilds[b.owner]=true end
@@ -652,6 +682,19 @@ function M.tradeSafe(state: any,ship: any): boolean
     end
     return false
 end
+-- OpenFrontWarships hook: a warship would have targeted this trade ship but the Shipping Co. kept it safe (tradeSafe true,
+-- past every other exclusion). The fx guild_save, at most once per GUILD_SAVE_SECONDS a ship (targeting re-runs every tick)
+local GUILD_SAVE_SECONDS=10
+function M.guildSaved(state: any,ship: any,warship: any)
+    local p=state.premium
+    if not p then return end
+    p.guildSaves=p.guildSaves or {}
+    local key=ship.id or ship
+    local last=p.guildSaves[key]
+    if last and state.ticks-last<GUILD_SAVE_SECONDS*TICKS_PER_SECOND then return end
+    p.guildSaves[key]=state.ticks
+    emit(state,p,{kind="guild_save",owner=ship.owner,ship=ship.id,tile=ship.tileId,by=warship and warship.owner or nil})
+end
 -- the State packet for one viewer: every premium building on the map + the viewer's own build options
 function M.packet(state: any,viewer: number): any?
     local p=state.premium
@@ -675,7 +718,7 @@ function M.packet(state: any,viewer: number): any?
                     readyTick=math.max(b.built,(p.trainedAt[viewer] or -math.huge)+MATCH.training_camp.Cooldown*TICKS_PER_SECOND)})
             elseif b then
                 local stake,payout=investOffer(state,p,viewer)
-                table.insert(options,{item=id,kind="invest",stake=stake,payout=payout,readyTick=b.built,
+                table.insert(options,{item=id,kind="invest",stake=stake,payout=payout,gain=investGain(state),readyTick=b.built,
                     active=if b.invest then {stake=b.invest.stake,payout=b.invest.payout,ends=b.invest.ends} else nil})
             else
                 table.insert(options,{item=id,kind="build",cost=M.cost(state,viewer,id),count=M.count(state,viewer,id),max=#MATCH[id].Costs})

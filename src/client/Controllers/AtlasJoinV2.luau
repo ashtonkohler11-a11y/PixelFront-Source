@@ -77,11 +77,14 @@ function V2.new(root: Frame,context: any): any
     local hit=back:FindFirstChild("PFHit");if hit then listen(hit.Activated,function() self:handleEscape() end) end
     local Line=require(script.Parent.TopbarLine)
     Line.keepRight(layer.Top,self.connections)
+    if Line.scaleTitle then Line.scaleTitle(layer.Top:FindFirstChild("Title"),self.connections) end -- R1: the title scales like desk
     -- on a phone Roblox's top bar reaches below y 76/1080: the canvas starts under it (its aspect lock shrinks it, centred)
     Line.clearBelow(canvas,self.connections)
     listen(self.bar.Search.Input:GetPropertyChangedSignal("Text"),function() self.search=self.bar.Search.Input.Text;self:render() end)
+    -- UI audit R8: the filter chips and the code's Go answer on their finger zones too (HitZone; author-pf3-hit-zones)
+    local HitZone=require(script.Parent.HitZone)
     for _,chip in self.bar.Filters:GetChildren() do
-        if chip:IsA("TextButton") then listen(chip.Activated,function() self.filter=chip:GetAttribute("PFFilter") or "All";self:render() end) end
+        if chip:IsA("TextButton") then listen(HitZone.signal(chip),function() self.filter=chip:GetAttribute("PFFilter") or "All";self:render() end) end
     end
     listen(self.codeInput:GetPropertyChangedSignal("Text"),function()
         local clean=Model.sanitizeCode(self.codeInput.Text)
@@ -89,7 +92,7 @@ function V2.new(root: Frame,context: any): any
         self.codeText=clean;self:renderCode()
     end)
     listen(self.codeInput.FocusLost,function(enter: boolean) if enter then self:joinCode() end end)
-    listen(self.bar.Code.Go.Activated,function() self:joinCode() end)
+    listen(HitZone.signal(self.bar.Code.Go),function() self:joinCode() end)
     listen(self.grid:GetPropertyChangedSignal("AbsoluteSize"),function() self:layout() end)
     listen(self.grid:GetPropertyChangedSignal("CanvasPosition"),function() self:thumbs() end)
     listen(Run.Heartbeat,function(dt) self:tick(dt) end)
@@ -178,7 +181,10 @@ function V2:render()
     local empty=self.canvas.Empty
     empty.Visible=#rows==0
     copy(empty,if not available then "Lobbies are unavailable right now" elseif #(self.state.rooms or {})>0 then "No lobbies match your search" else "No public lobbies right now")
-    copy(self.canvas.Status,Model.errorText(self.state) or "")
+    -- UI audit (PF - 3, 2026-10-28): only this page's own failures; another screen's RateLimited sat in the shared model and
+    -- greeted the player here on arrival ("Please wait a moment and try again." with nothing pressed)
+    local op=self.state.errorOperation
+    copy(self.canvas.Status,if op==nil or op=="JoinLobby" or op=="JoinCode" then Model.errorText(self.state) or "" else "")
     self:renderCode()
     self:layout()
 end

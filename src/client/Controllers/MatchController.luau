@@ -344,7 +344,7 @@ end
 
 function MatchController.weaponNotice(event: any,state: any): (string?,boolean)
     local attacker=state.names[event.attacker] or event.name or ""
-    if event.kind=="SAMHit" then return "SAM intercepted "..tostring(event.unitType),false end
+    if event.kind=="SAMHit" then return "SAM Launcher intercepted "..tostring(event.unitType),false end
     if event.type=="NUKE_INBOUND" then return attacker.." - atom bomb inbound",true end
     if event.type=="HYDROGEN_BOMB_INBOUND" then return attacker.." - hydrogen bomb inbound",true end
     if event.type=="MIRV_INBOUND" then return "⚠️⚠️⚠️ "..attacker.." - MIRV INBOUND ⚠️⚠️⚠️",true end
@@ -621,6 +621,7 @@ function MatchController.start()
     local remotes = Remotes.client()
     local preferences=UserSettings.new(nil,true) -- PF043 H: sound on by default (the web autoplay rule doesn't apply on Roblox)
     interface:setPreferences(preferences)
+    pcall(function() require(script.Parent.UiMotion).setPreferences(preferences) end) -- PF - 4 BUILD-OUT: the shared motion's Reduced motion
     local audio=AudioController.new(preferences)
     PacketFeed.bind({audio=audio,preferences=preferences}) -- PF021 B: the tutorial's cues and motion setting
     local deathSoundShown,winSoundHandled=false,false
@@ -1099,7 +1100,8 @@ function MatchController.start()
         ui.troops.Text = "Troops  " .. displayTroops(state.troops[1]) .. " / " .. displayTroops(cap)
         ui.territory.Text = Leaderboard.territoryText(state,state.counts[1] or 0)
         ui.bot.Text = ""
-        if variant then ui.clock.Text = variant.timerText end
+        -- UI audit 2026-10-28: one clock format with the SAFE countdown ("4:09", not "04:09"); the pinned timer text keeps its own
+        if variant then ui.clock.Text = (string.gsub(variant.timerText, "^0(%d:)", "%1")) end
         ui.controls.Visible = controller and playing and state.counts[1] > 0
         -- PF020 G8 Lobby Host+ spectator seat: the docks stay hidden (not the controller); a small chip says so.
         local spectatingChip=gameUI:FindFirstChild("PFSpectating")
@@ -1395,7 +1397,14 @@ function MatchController.start()
             if generation ~= mapGeneration then return end
             initialFitPending = false
             -- release QA (PF - 2): the camera now frames this match's map, so a Solo / tutorial pick's clock may start
-            -- (MatchService.soloPresent waits for this per match instead of the first Ready ever)
+            -- (MatchService.soloPresent waits for this per match instead of the first Ready ever). UI audit build-out (MM
+            -- 2026-10-28: the full 15 s from when the map is visible): a match server's "Joining your match" cover goes first;
+            -- public matches count you present from this too (PublicMatchRuntime)
+            local coverWait = 0
+            while ui.joining and ui.joining:active() and coverWait < 10 and generation == mapGeneration do
+                coverWait += RunService.RenderStepped:Wait()
+            end
+            if generation ~= mapGeneration then return end
             local view = snapshot
             if rendererReady and view and type(view.matchId) == "number" and view.state and view.state.phase == "Choosing" then
                 remotes.Command:FireServer({kind = "SpawnView", matchId = view.matchId})
@@ -1748,7 +1757,7 @@ function MatchController.start()
         MatchController.defer("PF.Diplomacy",function(state: any) local started=Performance.start();diplomacy:update(state);Performance.finish("client.update.diplomacy",started) end,packet.state)
         MatchController.defer("PF.QuickChat",quickChat.update,quickChat,packet.state,renderer.colors)
         MatchController.defer("PF.PrefView",function(state: any,alternate: boolean) local started=Performance.start();preferenceView:update(state,alternate);Performance.finish("client.update.preferences",started) end,packet.state,alternateView)
-        local center=(viewport.AbsoluteSize/2-offset)/tileSize
+        local center=(require(script.Parent.FrameGeometry).viewportSize(viewport)/2-offset)/tileSize -- PF - 4 perf: no forced layout mid-packet
         local cx,cy=math.floor(center.X),math.floor(center.Y)
         audio:updateAmbience(packet.state,tileSize,if cx>=0 and cy>=0 and cx<mapWidth and cy<mapHeight then cy*mapWidth+cx+1 else nil)
         if weaponMessageCursor~=nil then
@@ -1946,12 +1955,30 @@ function MatchController.start()
     -- PF043 (PF - 1; Ashton on the D8b board: "I LOVE this ... only for public matches"): the Leave confirm's requeue body
     -- (tools/atlas/author-pf043-requeue-leave.luau): Find a new match / Back to lobby / Stay on a public match; plain confirm elsewhere
     M13.requeue=require(script.Parent.LeaveRequeue).bind(gameUI:FindFirstChild("VariantExitConfirm"),{
-        canRequeue=function() return snapshot~=nil and snapshot.online==true and snapshot.matchKind=="public" and snapshot.spectator~=true and not ui.returning end,
+        canRequeue=function() return snapshot~=nil and snapshot.spectator~=true and not ui.returning
+            and (snapshot.online==true and snapshot.matchKind=="public" or ui.soloAgainConfig()~=nil) end,
         findNewMatch=function() return ui.findNewMatch~=nil and ui.findNewMatch() end,requeueState=function() return ui.requeueState and ui.requeueState() or nil end,
         stay=function() if variantHUD then variantHUD:finishExit(false) end end,leave=function() if variantHUD then variantHUD:finishExit(true) end end})
     PacketFeed.context.centerPlayer=function() if not modalBlocked() then centerPlayer() end end -- PIVOT D10: ReviveView centres the camera on a revived pocket (Locate's own call)
     PacketFeed.context.resetResult=function() dismissedOutcome=nil end
-    PacketFeed.context.openArsenal=function() return atlasMenu~=nil and atlasMenu:openLockedShop({tab="Armory"}) end -- PIVOT Armory: the Premium grid's last cell opens the Armory over the match -- PIVOT D10: a revive is a new life: a later Defeat shows its card again
+    -- the under-attack alert's Counterattack (Ashton 2026-10-27): attack the attacker at the current send %, the normal Attack
+    -- command (the server's new-player guard and reserve apply). The target: one of their tiles on your border, reachable by
+    -- land. false = no such tile (the alert then reads "Got it").
+    PacketFeed.context.counterattack=function(owner: number): boolean
+        if not snapshot or not canPlay() or type(owner)~="number" or owner<=1 then return false end
+        local st=snapshot.state;local w,h=st.map.width,st.map.height
+        for id=1,w*h do
+            if st.owners[id]==owner then
+                local x,y=(id-1)%w,(id-1)//w
+                if (x>0 and st.owners[id-1]==1) or (x<w-1 and st.owners[id+1]==1) or (y>0 and st.owners[id-w]==1) or (y<h-1 and st.owners[id+w]==1) then
+                    if canAttackAt(id) then return send("Attack",{targetId=id,ratio=ratio})~=false end
+                end
+            end
+        end
+        return false
+    end
+    PacketFeed.context.openShopAt=function(category: string?) return atlasMenu~=nil and atlasMenu:openLockedShop({category=category}) end -- UX audit #4: the end card's Next unlock
+    PacketFeed.context.openArsenal=function(item: string?) return atlasMenu~=nil and atlasMenu:openLockedShop({tab="Armory",item=item}) end -- PIVOT Armory: the Premium grid's last cell opens the Armory over the match -- PIVOT D10: a revive is a new life: a later Defeat shows its card again
     interface:bindIconBar({focus=function() if not modalBlocked() then centerPlayer() end end,
         leave=function() if snapshot and not modalBlocked() then BattleHudShell.confirmLeave(variantHUD) end end,
         settings=function() if snapshot and not modalBlocked() then gesture=nil;sliderGesture=nil;warshipBox=nil;warships:cancelBox()
@@ -2030,7 +2057,9 @@ function MatchController.start()
     gui.Destroying:Connect(function()preferenceOff();lobby:dispose();settingsMenu:dispose()end)
     remotes.PreferencesCommand:FireServer({kind="Ready"})
 
-    ui.sliderInput.InputBegan:Connect(function(event: InputObject)
+    -- UI audit build-out: a press on the slider's finger zone (PF - 3's HitZone strips) starts it too (no new local here: the
+    -- IIFE keeps start under its local limit)
+    ;(function() local ok,H=pcall(function() return require(script.Parent.HitZone) end);return if ok and type(H)=="table" and type(H.began)=="function" then H.began(ui.sliderInput) else ui.sliderInput.InputBegan end)():Connect(function(event: InputObject)
         if modalBlocked()then return end
         if not isController() or not canPlay() then return end
         if event.UserInputType == Enum.UserInputType.MouseButton1 or event.UserInputType == Enum.UserInputType.Touch then
@@ -2082,7 +2111,19 @@ function MatchController.start()
     -- PF043 (Ashton: "never add friction to leaving"): the Leave confirm's "Find a new match" (PF - 1's board). On a public
     -- match: leave straight into the next public match (the server's direct requeue; home + the lobby's requeue if that
     -- fails). false where it can't (Solo, a custom room, the tutorial, spectating): the caller then does a plain leave.
+    -- MM 2026-10-27 (leaving feeds the requeue): Solo's Leave confirm offers the next Solo too, a fresh match on the same
+    -- server (MatchService's hosted Play again), never a trip home and back. Not the tutorial (it isn't skippable).
+    ui.soloAgainConfig=function(): any?
+        if not snapshot or snapshot.online==true or snapshot.spectator==true or snapshot.tutorialMatch==true or not lobby then return nil end
+        local config=snapshot.state and snapshot.state.gameConfig
+        return if type(config)=="table" then config else nil
+    end
     ui.findNewMatch=function(): boolean
+        local solo=ui.soloAgainConfig()
+        if solo and not ui.returning then
+            if variantHUD then variantHUD:finishExit(false) end -- the confirm closes; the new match replaces this one
+            return lobby:startConfig(solo)
+        end
         if not snapshot or snapshot.online~=true or snapshot.matchKind~="public" or snapshot.spectator==true or ui.returning then return false end
         pcall(function() game:GetService("TeleportService"):SetTeleportSetting("PF026Requeue",{at=os.time()}) end)
         ui.requeueNext=true
@@ -2315,6 +2356,12 @@ function MatchController.start()
         activeTouches[event] = nil
         if event == sliderGesture or (sliderGesture and event.UserInputType == Enum.UserInputType.MouseButton1
             and sliderGesture.UserInputType == Enum.UserInputType.MouseButton1) then sliderGesture = nil end
+        -- Ashton 2026-10-28 ("building cancel should be right click"): a right click anywhere ends a placement (a blueprint or
+        -- an armed premium item) and does nothing else that click; with nothing placing it opens the action menu as before
+        if event.UserInputType == Enum.UserInputType.MouseButton2 and (cities.ghostActive or cities.premiumTitle) then
+            cities:clearGhost();radial.Visible=false;radialTarget=nil
+            return
+        end
         if event.UserInputType == Enum.UserInputType.MouseButton2 and isMapPointer(point(event.Position)) then
             openRadial(point(event.Position))
             return
@@ -2340,6 +2387,11 @@ function MatchController.start()
                 end
             end
         end
+    end)
+    -- Ashton 2026-10-28 ("Esc brings up the home page"): Esc on a PC always opens Roblox's own menu (a game can't stop it),
+    -- so a placement ends when that menu opens: back from it, nothing is still armed
+    GuiService.MenuOpened:Connect(function()
+        if cities and (cities.ghostActive or cities.premiumTitle) then cities:clearGhost();radial.Visible=false;radialTarget=nil end
     end)
     UserInputService.InputBegan:Connect(function(event: InputObject,processed: boolean)
         if event.UserInputType==Enum.UserInputType.Keyboard or event.UserInputType==Enum.UserInputType.MouseButton1 or event.UserInputType==Enum.UserInputType.Touch then audio:userGesture()end
@@ -2395,6 +2447,9 @@ function MatchController.start()
         if rendererReady then
             local stage=MatchController.drawStage -- PF020: each draw stage guarded (see drawStage)
             stage("PF.Draw.Transform",transformCommitter.commit,transformCommitter)
+            -- PF - 4 perf (2026-10-27 microprofile): World/Viewport geometry read ONCE a frame, right after the camera moves;
+            -- the map renderers below read this capture instead of each forcing a full GUI layout
+            stage("PF.Draw.Geometry",require(script.Parent.FrameGeometry).capture,world,viewport)
             if renderer.drawGraphics then stage("PF.Draw.Graphics",renderer.drawGraphics,renderer,tileSize,viewport,snapshot.state)end
             local stageStarted = Performance.start()
             debug.profilebegin("OpenFront.TerritoryDisplay")

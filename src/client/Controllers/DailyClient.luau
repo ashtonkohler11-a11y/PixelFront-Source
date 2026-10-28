@@ -133,13 +133,10 @@ function Client.line(c: any): string
     if goal==1 and SINGULAR[c.kind] then return SINGULAR[c.kind] end
     local f=LINES[c.kind];return if f then string.format(f,comma(goal)) else tostring(c.kind)
 end
--- The reward's short text: "25 · 40 XP" (the gem is drawn beside it)
+-- The reward's short text: "25" (the gem is drawn beside it). UI lock-in (PF - 4, R17): no XP part (Levels are gone)
 function Client.rewardText(reward: any): string
     if type(reward)~="table" then return "" end
-    local parts={}
-    if tonumber(reward.cobalt) then table.insert(parts,tostring(reward.cobalt)) end
-    if tonumber(reward.xp) then table.insert(parts,tostring(reward.xp).." XP") end
-    return table.concat(parts," · ")
+    return if tonumber(reward.cobalt) then tostring(reward.cobalt) else ""
 end
 -- Seconds until the daily reset (nil when unknown)
 function Client.resetsIn(s: any?): number?

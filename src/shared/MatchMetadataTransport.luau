@@ -7,7 +7,7 @@ local Teams=require(script.Parent.OpenFrontTeams)
 local Public=require(script.Parent.PublicGameConfig)
 local Metadata={}
 local mapTypes={};for _,map in Catalog.maps do mapTypes[map.type]=true end
--- PF029: the tutorial's own map (Honshu) is not in the pinned catalog; its config must still cross the wire
+-- PF029: a tutorial-only map is not in the pinned catalog; its config must still cross the wire (none since 2026-10-27)
 local tutorialTypes={}
 for _,map in require(script.Parent.OpenFrontTutorialMapCatalog).maps do mapTypes[map.type]=true;tutorialTypes[map.type]=true end
 local fields={"gameMap","gameMapSize","gameType","gameMode","playerTeams","difficulty","bots","nations",

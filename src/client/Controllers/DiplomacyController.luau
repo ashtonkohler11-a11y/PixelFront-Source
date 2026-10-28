@@ -611,8 +611,12 @@ function D:reserveNotice(packet: any)
     if packet.refused then require(script.Parent.Sfx).play("u_error") end -- PF043: a send refused by the reserve
     -- Release (new-player send guard, Ashton 2026-10-26): a new player (the server sets newPlayer: < 5 matches, not Ranked)
     -- learns once a match why some troops stayed home; experienced players never see it
+    -- Ashton's tips rule (TipMemory): it only explains, so it retires after 3 shows; off after 5 matches like every beginner tip
     if packet.newPlayer==true and not self.reserveTipShown then
+        local okT,Tips=pcall(require,script.Parent.TipMemory)
+        if okT and not (Tips :: any).allowed("reserve") then return end
         self.reserveTipShown=true;self:pushNotice("Some troops stay home to defend","INFO")
+        if okT then (Tips :: any).seen("reserve") end
     end
 end
 -- MM (Ashton's RoWorld test: 4 fronts at once, home army ~22% of max): a new player (OpenFrontMatches < 5; Ranked opens at
@@ -633,7 +637,12 @@ function D:frontsTip(state: any)
 end
 -- Release (new-player send guard): the server shrank a rapid repeat send (NewPlayerGuard); only its tip step shows a toast
 function D:guardNotice(packet: any)
-    if type(packet)=="table" and packet.tip==true then self:pushNotice("Let your troops grow back","WARNING") end
+    if type(packet)~="table" or packet.tip~=true then return end
+    -- Ashton's tips rule (TipMemory): retires after 3 shows; off after 5 matches (the server's guard stops there too)
+    local okT,Tips=pcall(require,script.Parent.TipMemory)
+    if okT and not (Tips :: any).allowed("guard") then return end
+    self:pushNotice("Let your troops grow back","WARNING")
+    if okT then (Tips :: any).seen("guard") end
 end
 function D:pushNotice(text: string,kind: string?,focus: number?,glyph: string?,detail: string?)
     if self.state and (self.state.counts[1] or 0)>0 then self:addNotice(text,focus,self.state.ticks,kind,nil,glyph,detail) end
@@ -856,9 +865,11 @@ end
 function D:refreshInspection(force: boolean?)
     if not self.card or self.destroyed then return end
     local state=self.state;local accent=self:accentColor("text")
-    -- Cursor card: mouse only, over owned land or a ship.
+    -- Cursor card: mouse only, over owned land or a ship; none while a building is being placed (UI audit 2026-10-28: it
+    -- popped up over your own land under the ghost)
     local cardData=nil
-    if state and self:mouseMode() and not self.panel.Visible and not self.emojiMenu.Visible then
+    local placing=self.ui.Controls.Placement.Visible or self.ui:GetAttribute("GhostStructure")~=nil
+    if state and self:mouseMode() and not self.panel.Visible and not self.emojiMenu.Visible and not placing then
         local unit=self:findUnit(self.hoverUnitId)
         if unit then cardData=Model.unit(state,unit,self:modelOptions(nil))
         elseif self.hoverOwner then cardData=Model.country(state,self.hoverOwner,self:modelOptions(self.hoverTile))

@@ -53,7 +53,7 @@ Spec.pages={
                 choice("quickChat","Quick chat and emotes","From other players.",{{"everyone","Everyone"},{"allies","Allies only"},{"off","Off"}}),
                 choice("showCosmetics","Show cosmetics from","Skins, flags, crowns and effects.",{{"off","Off"},{"you","You"},{"everyone","Everyone"}}),
             }},
-            {title="ALERTS",rows={choice("alerts","Alerts","Important = invasions, nukes, betrayals.",{{"all","All"},{"important","Important only"},{"off","Off"}})}},
+            {title="ALERTS",rows={choice("alerts","Alerts","Important = invasions, nukes, betrayals.",{{"all","All"},{"important","Key only"},{"off","Off"}})}},
             {title="VIP",rows={
                 choice("vipBadge","VIP badge","Gold badge on your name, the board and chat.",{{"show","Show"},{"hide","Hide"}}),
                 {id="nameplateStyle",kind="choice",source="vip",label="Nameplate style",hint="Your name on the map.",options={

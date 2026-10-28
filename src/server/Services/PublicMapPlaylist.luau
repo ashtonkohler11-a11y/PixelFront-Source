@@ -208,7 +208,7 @@ function Playlist:gameConfig(kind)
     local config={gameType="Public",gameMode=mode,gameMap=map,gameMapSize=if mods.isCompact then "Compact"else "Normal",maxPlayers=p,
         playerTeams=t or 2,publicGameModifiers=mods,difficulty=if mods.isHardNations or t=="Humans Vs Nations"then "Hard"else "Medium",
         donateGold=t~=nil,donateTroops=t~=nil,infiniteGold=false,infiniteTroops=false,instantBuild=false,randomSpawn=mods.isRandomSpawn==true,
-        nations=if t and t~="Humans Vs Nations"or gold and gold>=25000000 then "disabled"else "default",bots=if mods.isCompact then 100 else 400,
+        nations=if t and t~="Humans Vs Nations"or gold and gold>=25000000 then "disabled"else "default",bots=if mods.isCompact then 125 else 400, -- Ashton 2026-10-27: tribes x2.5 (was 100, capped at 50)
         spawnImmunityDuration=immunity,disabledUnits=disabled,disableClanTags=if not t then true else nil,
         startingGold=gold,goldMultiplier=mods.goldMultiplier,disableAlliances=mods.isAlliancesDisabled,waterNukes=mods.isWaterNukes,
         trusted=if trusted and not self.openTrust then true else nil}

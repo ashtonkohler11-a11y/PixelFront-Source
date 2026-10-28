@@ -6,6 +6,9 @@
 -- peak land is sampled; defeats come from the conquest events that name this player; the runtime sets the end
 -- facts (win, placement). Pure: the clock is passed in.
 local Facts = {}; Facts.__index = Facts
+-- Stats v3: each player's skill facts ride along (SkillFacts; absent in harnesses that load this module alone)
+local okSkill, SkillModule = pcall(function() return require(script.Parent:FindFirstChild("SkillFacts") :: any) end)
+local SkillFacts: any = if okSkill then SkillModule else nil
 Facts.ACTIVE_WINDOW = 120
 -- Commands that are playing the match (chat, emoji, pause, speed and the meta commands don't count)
 local GAMEPLAY = {Spawn = true, Attack = true, Boat = true, BoatRetreat = true, MoveWarship = true, Cancel = true, Retaliate = true,
@@ -13,7 +16,8 @@ local GAMEPLAY = {Spawn = true, Attack = true, Boat = true, BoatRetreat = true, 
     DonateGold = true, DonateTroops = true, Target = true, Build = true, Upgrade = true, Delete = true}
 function Facts.isGameplay(kind: any): boolean return type(kind) == "string" and GAMEPLAY[kind] == true end
 
--- options: {public = matchmaking (player defeats and placement pay), solo = Solo (difficulty scales the win)}
+-- options: {public = matchmaking (player defeats and placement pay), solo = Solo (difficulty scales the win),
+-- skill = SkillFacts options (hint, learned, bandStart, next)}
 function Facts.new(state: any, config: any?, owner: number, options: any?): any
     options = options or {}
     local cfg = config or {}
@@ -28,11 +32,15 @@ function Facts.new(state: any, config: any?, owner: number, options: any?): any
         sandbox = cfg.infiniteGold == true or cfg.infiniteTroops == true or cfg.instantBuild == true,
         difficulty = if options.solo then cfg.difficulty else nil, opponents = opponents,
         activeSeconds = 0, lastAction = -math.huge, lastSample = nil, peak = 0, tribes = 0, nations = 0, players = 0,
-        cursor = 0}, Facts)
+        cursor = 0, skill = if SkillFacts then SkillFacts.new(state, owner, options.skill) else nil}, Facts)
 end
 function Facts.command(self: any, now: number) self.lastAction = now end
 -- Called with every outgoing packet (~10/s): accrues active time, peak land and new defeats.
 function Facts.sample(self: any, state: any, now: number, paused: boolean?)
+    if self.skill then -- an observer: a failure there drops the skill facts for this match, never the packet
+        local ok, failure = pcall(self.skill.sample, self.skill, state)
+        if not ok then warn("[OpenFront] Skill facts failed: " .. tostring(failure)); self.skill = nil end
+    end
     local alive = (state.counts and state.counts[self.owner] or 0) > 0
     if self.lastSample and not paused and state.phase == "Playing" and alive and now - self.lastAction <= Facts.ACTIVE_WINDOW then
         self.activeSeconds += math.clamp(now - self.lastSample, 0, 5) -- a server hitch never mints minutes
@@ -62,7 +70,8 @@ function Facts.facts(self: any, extra: any?): any
     extra = extra or {}
     return {activeMinutes = self.activeSeconds // 60, peakLandPct = self.peak, tribes = self.tribes, nations = self.nations,
         players = self.players, public = self.public, sandbox = self.sandbox, difficulty = self.difficulty, opponents = self.opponents,
-        won = extra.won == true, placement = extra.placement, topHalf = extra.topHalf == true}
+        won = extra.won == true, placement = extra.placement, topHalf = extra.topHalf == true,
+        skill = if self.skill then (function() local ok, value = pcall(self.skill.facts, self.skill); return if ok then value else nil end)() else nil}
 end
 -- Rank among the humans and nations: the winner is 1st; a survivor counts everyone alive with more land; an
 -- eliminated player is behind everyone still alive. "of" is everyone who started. (Placement Cobalt uses it in public

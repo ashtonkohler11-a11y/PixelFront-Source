@@ -14,7 +14,8 @@
 --   from the buildings + the match state (client timers):
 --     Bank           a coin and "+2.5K/s" float up every 3 s (owner; a faint coin for others)
 --     Tax Office     coins fly from up to 3 of your Cities to it every 3 s, then "+X/s" (owner only)
---     Trade Guild    a shield with a glint over your trade ships that are safe near your Ports (owner only)
+--     guild_save Shipping Co. (Ashton 2026-10-27, "Only when it saves one"): one shield pops over your trade ship at the
+--              moment a raider's capture of it is blocked, a glint, then "Saved" (owner only; no periodic shield)
 --     Eng. Yard      a rocking wrench and sparks on your buildings under construction (owner only)
 --   the launches (PremiumBuildPlaceholder draws the Blitz / Titan / Airdrop sprites and the rings):
 --     Blitz a short hot trail; Titan a heavy smoke trail and a white flash before its shockwave; Airdrop 3 parachutes.
@@ -28,6 +29,8 @@ local Feed=require(script.Parent.MatchPacketFeed)
 local Notices=require(script.Parent.FeedNotices)
 local Arsenal=require(Shared:WaitForChild("ArsenalCatalog"))
 local okRenderer,BuildingRenderer=pcall(require,script.Parent.BuildingRenderer)
+local Math=require(script.Parent.PremiumFxMath)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local MATCH=Config.Arsenal.Match
 local STEP=Config.Match.StepSeconds
 local M={}
@@ -123,7 +126,7 @@ function M.start()
         end
     end
     -- ------------------------------------------------------------ geometry (World pixels, recomputed every frame)
-    local function zoom(): number return world.AbsoluteSize.X/math.max(1,latest and latest.width or 1) end
+    local function zoom(): number return (if okGeo then Geo.worldSize(world) else world.AbsoluteSize).X/math.max(1,latest and latest.width or 1) end
     local function unit(): number -- one art pixel: a tenth of a base building at this zoom (1.5 to 5 px)
         local z=zoom();local base=if okRenderer then (BuildingRenderer :: any).presentationSize(z,nil) else 24
         return math.clamp(base/10,1.5,5)
@@ -350,9 +353,32 @@ function M.start()
         flash(p,Color3.fromRGB(120,170,255),unit()*7,.5,true)
         pop(p,"+"..short((e.troops or 0)/10),TROOP,TROOP_INK,1,5,nil,true)
     end
-    local FX: {[string]: (any)->()}={zap=zap,shell=shell,warden_fire=wardenFire,warden=wardenHit}
+    -- Shipping Co. (PF - 2's fx guild_save {owner, ship, tile, by} = a raider's capture of that trade ship was just blocked):
+    -- one shield pops over the ship (it rides along with it), a white flash behind, a glint sweeps it, then "Saved"
+    local function guildSave(e: any)
+        if not mine(e.owner) or type(e.tile)~="number" then return end
+        local u=unit();local id=e.ship;local last=e.tile
+        local function over(): Vector2
+            for _,s in (state and state.tradeShips) or {} do
+                if s.id==id and type(s.tileId)=="number" then last=s.tileId;break end
+            end
+            return at(last)-Vector2.new(0,u*8)
+        end
+        flash(over,Color3.fromRGB(205,230,255),u*9,.25)
+        local sh=take("shield");sh.ClipsDescendants=true;paint(sh,PALETTE.shield,0)
+        local glint=px(Color3.new(1,1,1),1,.2);glint.Parent=sh;glint.AnchorPoint=Vector2.new(.5,.5);glint.Rotation=0
+        play(1.4,{glint,sh},function(a)
+            local k=Math.shieldScale(a);sh.Size=UDim2.fromOffset(u*7*k,u*8*k);place(sh,over())
+            local g=Math.glint(a)
+            glint.Position=UDim2.fromScale(-.2+1.4*g,.5);glint.Size=UDim2.new(0,math.max(1,u*1.5),1.2,0);glint.Visible=g>0 and g<1
+            local fade=Math.fade(a)
+            for _,f in sh:GetChildren() do if f~=glint and f.Visible then f.BackgroundTransparency=fade end end
+        end,function() glint.Parent=layer end)
+        pop(function() return over()-Vector2.new(0,u*3) end,"Saved",Color3.fromRGB(190,225,255),Color3.fromRGB(10,28,52),1.3,5,nil,true)
+    end
+    local FX: {[string]: (any)->()}={zap=zap,shell=shell,warden_fire=wardenFire,warden=wardenHit,guild_save=guildSave}
     local FX_ITEM: {[string]: string}={zap="tesla_coil",shell="artillery",
-        warden_fire="warden",warden="warden"}
+        warden_fire="warden",warden="warden",guild_save="trade_guild"}
     -- the reshuffle's events (packet.events: notices + sounds elsewhere; these are their map moments)
     local EVENT_FX: {[string]: (any)->()}={payout=stockPayout,train=train}
     -- ------------------------------------------------------------ the launches (polish beside the placeholder's sprites)
@@ -480,34 +506,6 @@ function M.start()
                     pulse(b,GOLD)
                     pop(top,"+"..short(MATCH.tax_office.GoldPerCityLevel*math.min(MATCH.tax_office.MaxLevels,levels)*share).."/s",GOLD,GOLD_INK,1.3,5,nil,true)
                 end
-            end
-        end
-        -- Trade Guild: a shield glint over each of your trade ships that is safe (near one of your Ports)
-        if owns.trade_guild and due("guild",2.5) then
-            local r2=MATCH.trade_guild.SafeRange^2;local w=latest.width;local shown=0
-            for _,ship in state.tradeShips or {} do
-                if shown>=6 then break end
-                if not mine(ship.owner) or ship.active==false or type(ship.tileId)~="number" then continue end
-                local sx,sy=(ship.tileId-1)%w,(ship.tileId-1)//w;local safe=false
-                for _,port in state.ports or {} do
-                    if mine(port.owner) and port.active~=false then local px_,py=(port.tileId-1)%w,(port.tileId-1)//w;if (px_-sx)^2+(py-sy)^2<=r2 then safe=true;break end end
-                end
-                if not safe then continue end
-                shown+=1
-                local id=ship.id
-                local function over(): Vector2
-                    for _,s in (state and state.tradeShips) or {} do if s.id==id and type(s.tileId)=="number" then return at(s.tileId)-Vector2.new(0,u*7) end end
-                    return at(ship.tileId)-Vector2.new(0,u*7)
-                end
-                local sh=take("shield");sh.ClipsDescendants=true;paint(sh,PALETTE.shield,0)
-                local glint=px(Color3.new(1,1,1),1,.2);glint.Parent=sh;glint.AnchorPoint=Vector2.new(.5,.5);glint.Rotation=0
-                play(1.1,{glint,sh},function(a)
-                    local grow=math.min(1,a/.15);sh.Size=UDim2.fromOffset(u*7*grow,u*8*grow);place(sh,over())
-                    local g=math.clamp((a-.25)/.35,0,1)
-                    glint.Position=UDim2.fromScale(-.2+1.4*g,.5);glint.Size=UDim2.new(0,math.max(1,u*1.5),1.2,0);glint.Visible=g>0 and g<1
-                    local fade=math.clamp((a-.8)/.2,0,1)
-                    for _,f in sh:GetChildren() do if f~=glint and f.Visible then f.BackgroundTransparency=fade end end
-                end,function() glint.Parent=layer end)
             end
         end
         -- Engineering Yard: your buildings under construction get a quiet tick of work (two tiny sparks; a premium site's own

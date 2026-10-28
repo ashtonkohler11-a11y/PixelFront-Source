@@ -12,10 +12,11 @@ local Blueprint={}
 -- Slot 7 (key 7) is the Warship (Ashton: "warships need to be added at the bottom"): launched from a port onto coastal water.
 Blueprint.Order=table.freeze({"City","Factory","Port","DefensePost","MissileSilo","SAMLauncher","Warship"})
 Blueprint.Nuclear=table.freeze({"AtomBomb","HydrogenBomb","MIRV"})
-Blueprint.NuclearNames=table.freeze({AtomBomb="Atom",HydrogenBomb="Hydrogen",MIRV="MIRV"})
+-- R21 (MM, 2026-10-28: one name per thing): the build dock's names (Game.BuildMenu) are the display names everywhere
+Blueprint.NuclearNames=table.freeze({AtomBomb="Atom Bomb",HydrogenBomb="Hydrogen Bomb",MIRV="MIRV"})
 Blueprint.Catalog=table.freeze({"City","Factory","Port","DefensePost","MissileSilo","SAMLauncher","Warship","AtomBomb","HydrogenBomb","MIRV"})
-Blueprint.Names=table.freeze({City="City",Factory="Factory",Port="Port",DefensePost="Border defense",MissileSilo="Missile silo",SAMLauncher="Air defense",Warship="Warship",AtomBomb="Atom bomb",HydrogenBomb="Hydrogen bomb",MIRV="MIRV"})
-Blueprint.ChipNames=table.freeze({City="City",Factory="Factory",Port="Port",DefensePost="Defense",MissileSilo="Silo",SAMLauncher="Air defense",Warship="Warship"})
+Blueprint.Names=table.freeze({City="City",Factory="Factory",Port="Port",DefensePost="Defense Post",MissileSilo="Missile Silo",SAMLauncher="SAM Launcher",Warship="Warship",AtomBomb="Atom Bomb",HydrogenBomb="Hydrogen Bomb",MIRV="MIRV"})
+Blueprint.ChipNames=table.freeze({City="City",Factory="Factory",Port="Port",DefensePost="Defense Post",MissileSilo="Missile Silo",SAMLauncher="SAM Launcher",Warship="Warship"})
 Blueprint.SourceNames=table.freeze({DefensePost="Defense Post",MissileSilo="Missile Silo",SAMLauncher="SAM Launcher",AtomBomb="Atom Bomb",HydrogenBomb="Hydrogen Bomb"})
 Blueprint.Purposes=table.freeze({City="Grow troop capacity",Factory="Connect trade by rail",Port="Earn gold from trade",DefensePost="Protect your borders",MissileSilo="Launch nuclear weapons",SAMLauncher="Intercept enemy nukes",Warship="Control the sea",AtomBomb="Small nuclear strike",HydrogenBomb="Large nuclear strike",MIRV="Strike a whole nation"})
 Blueprint.Shortcuts=table.freeze({City="1",Factory="2",Port="3",DefensePost="4",MissileSilo="5",SAMLauncher="6",Warship="7",AtomBomb="8",HydrogenBomb="9",MIRV="0"})

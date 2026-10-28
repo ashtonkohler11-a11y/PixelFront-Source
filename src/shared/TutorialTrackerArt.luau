@@ -24,9 +24,9 @@ Art.H=table.freeze({panel="#1f1f1f",raised="#292929",inset="#161616",insetLine="
 Art.Steps=table.freeze({
     table.freeze({key="capital",color="#ffd77a",title="Place your capital",hint="Click a spot on the map to start there.",stamp="CAPITAL PLACED",
         learn="Next: grow your land"}),
-    table.freeze({key="expand",color="#8fc46a",title="Expand your land",hint="Send troops into the grey land next to you.",stamp="LAND DOUBLED",
+    table.freeze({key="expand",color="#8fc46a",title="Expand your land",hint="Send troops into the open land next to you.",stamp="LAND DOUBLED",
         learn="Next: take a tribe's land"}),
-    table.freeze({key="tribe",color="#ef6a5e",title="Defeat a tribe",hint="Tribes are weak. Take all of their land.",stamp="TRIBE DESTROYED",
+    table.freeze({key="tribe",color="#ef6a5e",title="Defeat a tribe",hint="Tribes are weak. Take their land.",stamp="TRIBE RAIDED",
         learn="Next: test a nation"}),
     table.freeze({key="attackNation",color="#e0607e",title="Attack a nation",hint="Send an attack into a nation's land. No need to win.",stamp="ATTACK LAUNCHED",
         learn="Next: grow your gold"}),

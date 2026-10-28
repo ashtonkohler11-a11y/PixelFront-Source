@@ -62,6 +62,7 @@ function V2.new(root: Frame,context: any): any
     local hit=back:FindFirstChild("PFHit");if hit then listen(hit.Activated,function() if context.back then context.back() end end) end
     local Line=require(script.Parent.TopbarLine)
     Line.keepRight(layer.Top,self.connections);Line.clearBelow(canvas,self.connections)
+    if Line.scaleTitle then Line.scaleTitle(layer.Top:FindFirstChild("Title"),self.connections) end -- R1: the title scales like desk
     local stats=find(canvas,"Hero.Stats")
     if stats then listen(stats.Activated,function() if context.openStats then context.openStats() end end) end
     local GOLD,LINE=Color3.fromHex("#ddbf76"),Color3.new(1,1,1)

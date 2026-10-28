@@ -6,6 +6,13 @@ local Transport=require(Shared.MatchTransport)
 local Perspective=require(Shared.MatchPerspective)
 local Commands=require(Shared.PublicMatchCommands)
 local SendDebounce=require(Shared.SendDebounce) -- PF043: a repeat troop send inside 1 s is dropped
+local NewPlayerGuard=require(Shared.NewPlayerGuard) -- release: a new player's rapid repeat sends shrink
+-- the player's recorded match count (StatsService sets OpenFrontMatches); nil (unknown) counts as experienced
+local function matchesOf(player:any):number?
+    if typeof(player)~="Instance" then return nil end
+    local value=player:GetAttribute("OpenFrontMatches")
+    return if type(value)=="number" then value else nil
+end
 local Config=require(Shared.Config)
 local Random=require(Shared.OpenFrontRandom)
 local PartyAllies=require(Shared.PartyAllies) -- PF044: party partners start allied
@@ -59,6 +66,16 @@ function Runtime:arsenalUnlocked(player:any,owned:any)
     if not session or session.spectator or not session.owner then return end
     Premium.grant(self.state,session.owner,owned)
 end
+-- stats (UI audit build-out): how many humans came in this player's party (1 = no party), from the frozen manifest
+function Runtime:partySize(userId:number):number
+    local humans=self.manifest.humans or {}
+    local mine=nil
+    for _,h in humans do if type(h)=="table" and tostring(h.userId)==tostring(userId) then mine=h.party end end
+    if type(mine)~="string" or mine=="" then return 1 end
+    local n=0
+    for _,h in humans do if type(h)=="table" and h.party==mine then n+=1 end end
+    return math.max(n,1)
+end
 function Runtime.new(manifest:any,ports:any):any
     local gameConfig=manifest.config
     if manifest.kind=="public" and type(gameConfig)=="table" then -- PF044: public matches place in 20 s (Config.PublicQueue)
@@ -107,6 +124,16 @@ function Runtime:add(player:any):boolean
         local owned=if okService and Cosmetics.arsenalOwned then Cosmetics.arsenalOwned(player.UserId) else nil
         if owned then Premium.grant(self.state,owner,owned) end
     end
+    -- Early-wipe fix: a new player (first NewPlayerGuard.Matches matches; never Ranked) is off-limits to nations for
+    -- Config.Combat.NewPlayerGrace.Seconds after spawning (Simulation.newPlayerGraced). The match count can land after the
+    -- join (StatsService), so it's read now and again when it arrives.
+    if type(self.manifest.ranked)~="table" then
+        local state=self.state
+        -- (0 recorded matches = their first match: the longer FirstMatchSeconds window)
+        local function grace() local matches=matchesOf(player);if NewPlayerGuard.eligible(matches,false) then state.newPlayerGrace=state.newPlayerGrace or {};state.newPlayerGrace[owner]=if matches==0 then Config.Combat.NewPlayerGrace.FirstMatchSeconds else true end end
+        grace()
+        if typeof(player)=="Instance" then player:GetAttributeChangedSignal("OpenFrontMatches"):Once(grace) end
+    end
     -- PF036 rejoin: a player paid on leaving ("left") is never paid again at the end
     if self.paid and self.paid[player.UserId] then self.sessions[player].levelGranted=true end
     -- PF023: this player's XP facts (ports.levels is LevelsService.api, injected; absent in harnesses = no XP).
@@ -130,13 +157,23 @@ function Runtime:remove(player:any)
     if session then self:endLevels(player,session,"left") end -- PF023: leaving keeps what was earned (no win or place)
     self.sessions[player]=nil -- Territory and shared state remain intact.
 end
--- PF030: the humans connected and loaded (their session sent its first Ready). Disconnected players and players who
--- never loaded don't hold the spawn phase.
+-- PF030: the humans connected and loaded. Disconnected players and players who never loaded don't hold the spawn phase.
+-- UI audit build-out (MM 2026-10-28: 15 s everywhere, from when the map is visible): loaded = the client shows the map
+-- (its SpawnView, sent once the camera frames it and the "Joining your match" cover is gone), or it already picked, or
+-- VIEW_GRACE s after its first Ready when no SpawnView comes (a stalled view; the same 20 s as Solo's net). The first
+-- Ready is the server's own at admission (GlobalLobbyService), before the client has even loaded, so it alone started
+-- the pick while a phone was still loading.
+Runtime.VIEW_GRACE=20
+function Runtime:loaded(session:any):boolean
+    if session.lastReady==-math.huge then return false end
+    return session.viewed==true or self.state.spawnTiles[session.owner]~=nil
+        or self.ports.now()-(session.firstReady or session.lastReady)>=Runtime.VIEW_GRACE
+end
 function Runtime:present():{number}
     local list={}
     for _,session in self.sessions do
         local player=self.state.players[session.owner]
-        if not session.spectator and session.lastReady>-math.huge and player and not player.isDisconnected and not table.find(list,session.owner)then table.insert(list,session.owner)end
+        if not session.spectator and self:loaded(session) and player and not player.isDisconnected and not table.find(list,session.owner)then table.insert(list,session.owner)end
     end
     table.sort(list)
     return list
@@ -152,7 +189,7 @@ function Runtime:loadedVotes():(number,number)
     local loaded,votes=0,0
     for _,session in self.sessions do
         local player=self.state.players[session.owner]
-        if not session.spectator and session.lastReady>-math.huge and player and not player.isDisconnected then
+        if not session.spectator and self:loaded(session) and player and not player.isDisconnected then
             loaded+=1;if session.votedBegin then votes+=1 end
         end
     end
@@ -168,7 +205,7 @@ end
 function Runtime:waiting():any?
     if self.loadGateOpen or self.state.phase~="Choosing" then return nil end
     local loadedBy={}
-    for _,session in self.sessions do if not session.spectator and session.lastReady>-math.huge then loadedBy[session.owner]=true end end
+    for _,session in self.sessions do if not session.spectator and self:loaded(session) then loadedBy[session.owner]=true end end
     local seats={}
     for owner,p in self.state.players do if p.playerType=="Human" then table.insert(seats,{owner=owner,loaded=loadedBy[owner]==true}) end end
     local loaded,votes=self:loadedVotes();local now=self.ports.now()
@@ -191,7 +228,7 @@ function Runtime:spawnPresent():{number}
     if self.ports.now()-self.startedAt<(Config.PublicQueue.LoadCap or 30)then
         for _,session in self.sessions do
             local player=self.state.players[session.owner]
-            if not session.spectator and session.lastReady==-math.huge and player and not player.isDisconnected then return {}end
+            if not session.spectator and not self:loaded(session) and player and not player.isDisconnected then return {}end
         end
     end
     self.loadGateOpen=true
@@ -262,6 +299,9 @@ function Runtime:publish()
             xpResult=session.xpResult,state=wire, -- the match's end result for the card (MatchRewardsService: cobalt, lines, the 2x chip)
             matchKind=self.manifest.kind, -- PF026: display only (the end card hides Play again in custom rooms)
             premiumOff=if type(self.manifest.ranked)=="table" then true else nil, -- release QA: no Arsenal in Ranked (the client hides the wing)
+            -- early-wipe fix (PF - 1's alert): the first attack on you this match, {tick, by (your perspective's owner)}
+            firstAttacked=(function() local hit=not session.spectator and self.state.firstAttacked and self.state.firstAttacked[session.owner]
+                return if hit then {tick=hit.tick,by=Perspective.owner(hit.by,session.owner)} else nil end)(),
             choosing=if choosing then {deadlineTick=choosing.deadlineTick,present=choosing.present,picked=choosing.picked,allPicked=choosing.allPicked,seconds=choosing.seconds,
                 you=if session.spectator then nil elseif self.state.spawnTiles[session.owner]then "picked" else "choosing"}else nil,
             waiting=if waiting then {seats=Runtime.seatsFor(waiting.seats,session.owner),loaded=waiting.loaded,total=waiting.total,votes=waiting.votes,needed=waiting.needed,
@@ -343,11 +383,19 @@ function Runtime:_command(entry:any)
     if session.spectator or entry.request.matchId~=self.matchId then return end -- spectators never command
     local request=Perspective.command(entry.request,session.owner)
     if SendDebounce.blocked(self,session.owner,request.kind,self.ports.now()) then return end -- PF043: silently (the client mirrors it)
+    -- release (PF - 4's NewPlayerGuard, Ashton-approved): a new player's rapid repeat sends shrink; never in Ranked
+    local newPlayer=NewPlayerGuard.eligible(matchesOf(entry.player),type(self.manifest.ranked)=="table")
+    local guard=nil
+    if NewPlayerGuard.KINDS[request.kind] then
+        local ratio;ratio,guard=NewPlayerGuard.apply(self,session.owner,request.kind,request.ratio,self.state.troops[session.owner] or 0,self.ports.now(),newPlayer)
+        if ratio~=request.ratio then request=table.clone(request);request.ratio=ratio end
+    end
     local ok,message,reserve=Commands.apply(self.state,session.owner,request,entry.issuedDuringChoosing)
     if ok then SendDebounce.stamp(self,session.owner,request.kind,self.ports.now()) end
+    if ok and guard then self.ports.send(entry.player,guard) end
     if ok and session.levelFacts and self.ports.levels.isGameplay(request.kind) then session.levelFacts:command(self.ports.now()) end -- PF023: active
     -- PF014: a reduced or refused send shows only the small dock hint, never a toast.
-    if reserve then self.ports.send(entry.player,{kind="ReserveNotice",kept=reserve.kept,sent=reserve.sent,refused=reserve.refused==true})
+    if reserve then self.ports.send(entry.player,{kind="ReserveNotice",kept=reserve.kept,sent=reserve.sent,refused=reserve.refused==true,newPlayer=newPlayer})
     elseif not ok and message then self.ports.send(entry.player,{kind="Notice",message=message,refused=true})end -- PF043: refused = the u_error sound
     if ok then self.publishDue=true end -- PF032: published at this job's next commit/idle (commands of one job share it)
 end
@@ -372,6 +420,12 @@ function Runtime:command(player:any,request:any):boolean
         end)
         return true
     end
+    -- UI audit build-out: the client shows this match's map (MatchController's SpawnView); presence counts from here (loaded)
+    if request.kind=="SpawnView"then
+        if session.spectator or request.matchId~=self.matchId then return false end
+        if not session.viewed then session.viewed=true;self.publishDue=true end
+        return true
+    end
     -- PF044 vote to begin: a loaded player, while the match waits for players (no scheduler entry: runtime state only)
     if request.kind=="VoteBegin"then
         if session.spectator or session.lastReady==-math.huge or self.loadGateOpen or self.state.phase~="Choosing" or session.votedBegin then return false end
@@ -379,7 +433,7 @@ function Runtime:command(player:any,request:any):boolean
     end
     local copied
     if request.kind=="Ready"then
-        if now-session.lastReady<Config.Network.ReadyCooldown then return false end;session.lastReady=now
+        if now-session.lastReady<Config.Network.ReadyCooldown then return false end;session.lastReady=now;session.firstReady=session.firstReady or now
         copied={kind="Ready",haveSeq=if type(request.haveSeq)=="number" and request.haveSeq==request.haveSeq and request.haveSeq%1==0 then request.haveSeq else nil,
             terrain=if request.terrain==true then true else nil}
     else copied=Commands.copy(request)end
@@ -407,7 +461,8 @@ function Runtime:endLevels(player:any,session:any,reason:string)
         local info={userId=player.UserId,key="pub:"..tostring(self.manifest.id),kind="Public",matchId=self.matchId,
             result=if won then "Victory" elseif reason=="left" then "Left" else "Defeat",state=state,owner=owner,
             facts=facts:facts({won=won}),xp=if ok and type(result)=="table" then result.total else nil,
-            place=if ok and type(result)=="table" then result.place else nil} -- PF037: the MatchEnd event's place
+            place=if ok and type(result)=="table" then result.place else nil, -- PF037: the MatchEnd event's place
+            party=self:partySize(player.UserId)} -- stats: party size per match
         if levels.stats then levels.stats(info) end
         if levels.daily then levels.daily(info,true) end
     end) end

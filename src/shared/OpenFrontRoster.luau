@@ -8,7 +8,7 @@ local Names = require(script.Parent.OpenFrontTribeNames)
 local WorldNations = require(script.Parent.OpenFrontWorldNations)
 local VariantData = require(script.Parent.OpenFrontRosterData)
 local MapCatalog = require(script.Parent.OpenFrontMapCatalog)
-local TutorialMapCatalog = require(script.Parent.OpenFrontTutorialMapCatalog) -- PF029: tutorial-only maps (Honshu: Japan's "asia" names)
+local TutorialMapCatalog = require(script.Parent.OpenFrontTutorialMapCatalog) -- PF029: tutorial-only maps (none since 2026-10-27)
 local Teams = require(script.Parent.OpenFrontTeams)
 local Balance = require(script.Parent.OpenFrontMatchBalance)
 local Roster = {}
@@ -54,7 +54,8 @@ function Roster.nations(config: any,manifest: any,numHumans: number,random: Rand
     local target=if type(config.nations)=="number"then config.nations else nil
     if target==nil and config.gameType=="Public"then
         if config.gameMode=="Team"and config.playerTeams=="Humans Vs Nations"then target=numHumans
-        elseif config.gameMapSize=="Compact"then target=if #nations==0 then 0 else math.max(1,math.floor(#nations*.25))end
+        -- (Ashton 2026-10-26: double the nations; OpenFront's own share is .25 = Availability.NationShare's old value)
+        elseif config.gameMapSize=="Compact"then target=if #nations==0 then 0 else math.max(1,math.floor(#nations*.5))end
     end
     if target==nil then local out={};for _,n in nations do table.insert(out,toNation(n))end;return out end
     local shuffled=shuffle(nations,random)

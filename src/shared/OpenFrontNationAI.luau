@@ -6,6 +6,7 @@
 local Random = require(script.Parent.OpenFrontRandom)
 local AttackMath = require(script.Parent.OpenFrontNationAttackMath)
 local GameConfig = require(script.Parent.OpenFrontGameConfig)
+local Dealer = require(script.Parent.OpenFrontDealer) -- stats v3: Solo cohort A only, while Config.Dealer.Enabled (state.dealer)
 local NationAI = {}
 local function friendly(owner: number,target: number,api: any): boolean
     return if api.friendly then api.friendly(owner,target) else owner==target
@@ -79,6 +80,7 @@ function NationAI.tick(state: any, owner: number, api: any)
         return
     end
     if #enemies>0 and api.allianceRequests then api.allianceRequests(owner,enemies) end
+    if state.dealer then Dealer.attention(state,owner,enemies) end -- a struggling human: opportunists look past them
     local function attackBots(): boolean
         local bots,order={},{}
         for _,other in nearby do
@@ -231,6 +233,10 @@ function NationAI.tick(state: any, owner: number, api: any)
         Medium={"bots","nuked","retaliate","assist","betray","hated","afk","traitor","weakest","island","donate"},
         Hard={"bots","retaliate","assist","betray","nuked","traitor","afk","hated","veryWeak","juicy","victim","weakest","island","donate"},
         Impossible={"retaliate","bots","veryWeak","betray","assist","victim","traitor","juicy","afk","nuked","hated","weakest","island","donate"}}
+    if state.dealer then -- a cruising human: strike while their troops are out (or their land is thinly held)
+        local target=Dealer.smart(state,owner,enemies)
+        if target and send(target) then Dealer.smartSent(state);return end
+    end
     for _,strategy in orders[AttackMath.difficulty(state)] do if strategies[strategy]() then return end end
 end
 

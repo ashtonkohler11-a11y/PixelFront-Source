@@ -138,7 +138,7 @@ function Board:paint()
         row.Value.TextColor3 = medal or (theme.Text or Color3.fromRGB(238, 238, 235))
     end
     self.empty.Visible = #v.rows == 0
-    copy(self.empty, if v.status == "loading" then "Loading this week's boards…" else "No results yet this week. Win a match to lead it.")
+    copy(self.empty, if v.status == "loading" then "Loading this week's boards…" else "No results yet this week." --[[ UI audit build-out (R5): the You row already says how to get on it ]])
     local you = v.you
     self.you.Visible = you ~= nil
     if you then

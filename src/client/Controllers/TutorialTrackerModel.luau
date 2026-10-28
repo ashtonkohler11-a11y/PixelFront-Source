@@ -179,12 +179,26 @@ function Model.hex(color: any): string?
     end)
     return if ok then text else nil
 end
+-- First-match step 3 (PF - 2, 2026-10-26, after the A06 stalls): it completes on 300 tribe tiles taken (snapshot.tribe
+-- {taken, goal}; land won back doesn't undo it), on the old elimination, or by itself after 45 s with no tribe on your
+-- border (snapshot.tribeSkipped). With the server's count the bar is tiles taken / goal; the target still names who.
+local function tribeTaken(goal: any,snapshot: any): boolean
+    local t=type(snapshot)=="table" and snapshot.tribe
+    if type(t)~="table" or type(t.goal)~="number" or type(t.taken)~="number" or t.goal<=0 then return false end
+    local taken=math.max(0,t.taken)
+    goal.taken=taken;goal.goalTiles=t.goal;goal.f=math.clamp(taken/t.goal,0,1);goal.ready=taken>=t.goal
+    goal.amount=Model.whole(math.min(taken,t.goal));goal.of=Model.whole(t.goal)
+    goal.last=goal.f>=.75
+    return true
+end
 local function landGoal(state: any,memory: any,key: string,input: any): (any,number)
     local tribe=key=="tribe"
     local target=Model.target(state,memory,key,if tribe then "Bot" else "Nation")
     if not target then
-        return {kind=key,none=true,over=if tribe then "NO TARGET" else "NO RIVAL",name=if tribe then "No tribe on your border" else "No nation on your border",
-            sub="Expand until you touch one",left=1,cracks=0},0
+        local none: any={kind=key,none=true,over=if tribe then "NO TARGET" else "NO RIVAL",name=if tribe then "No tribe on your border" else "No nation on your border",
+            sub="Expand until you touch one",left=1,cracks=0}
+        if tribe and tribeTaken(none,input.snapshot) then return none,none.f end
+        return none,0
     end
     local player=state.players[target.owner]
     local left=Model.toTake(state,target.owner)
@@ -195,6 +209,7 @@ local function landGoal(state: any,memory: any,key: string,input: any): (any,num
         local ok,color=pcall(input.ownerColor,target.owner)
         goal.ownerColor=if ok then Model.hex(color) else nil
     end
+    if tribe and tribeTaken(goal,input.snapshot) then return goal,goal.f end
     if tribe then
         goal.last=left<Model.LAST_STAND
         goal.over=if goal.last then "LAST STAND" else "TARGET LOCKED"
@@ -228,7 +243,7 @@ local function nukeGoal(state: any,input: any): (any,number)
         goal.saving=Model.saving("Atom Bomb",bomb,gold,rate)
         goal.ready=gold>=bomb and Weapons.canLaunch(armed)
         if goal.ready then
-            goal.headline="LAUNCH READY";goal.line="Pick Atom Bomb, then a target";goal.foot="Silo armed · "..Model.short(bomb).." in hand"
+            goal.headline="LAUNCH READY";goal.line="Pick Atom Bomb, then a target";goal.foot="Missile Silo armed · "..Model.short(bomb).." in hand"
             progress=1
         elseif gold<bomb then
             goal.headline="Save for the bomb";goal.big=Model.short(bomb-gold);goal.unit="to go";goal.foot="Atom Bomb · "..Model.short(bomb)
@@ -254,7 +269,7 @@ local function nukeGoal(state: any,input: any): (any,number)
         goal.saving=Model.saving("MissileSilo",siloCost,gold,rate)
         goal.headline="Build a Missile Silo"
         if gold>=siloCost then goal.big="Ready";goal.unit="to build" else goal.big=Model.short(siloCost-gold);goal.unit="to go" end
-        goal.foot="Silo "..Model.short(siloCost).." · it arms in "..seconds(config(state).MissileSilo.ConstructionTicks/10)
+        goal.foot="Missile Silo "..Model.short(siloCost).." · it arms in "..seconds(config(state).MissileSilo.ConstructionTicks/10)
         progress=goal.arm/3
     end
     if goal.saving then goal.etaSeconds,goal.etaText=goal.saving.etaSeconds,goal.saving.etaText end
@@ -308,7 +323,8 @@ function Model.view(input: any): any
     local total=Model.TOTAL
     local step=math.clamp(tonumber(snapshot.step) or 1,1,total+1)
     local done=step-1
-    local view: any={step=step,total=total,done=done,pct=Model.percent(done),complete=snapshot.complete==true or step>total,reward=snapshot.reward}
+    local view: any={step=step,total=total,done=done,pct=Model.percent(done),complete=snapshot.complete==true or step>total,reward=snapshot.reward,
+        tribeSkipped=snapshot.tribeSkipped==true}
     if view.complete then
         view.ghost=0;view.header="TUTORIAL COMPLETE";view.pctText="100%"
         return view

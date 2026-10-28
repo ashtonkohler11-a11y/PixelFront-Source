@@ -302,7 +302,11 @@ function Warships.findBestTarget(state: any, execution: any, types: {string}, in
                 or (destination and (destination.owner == ship.owner or friendly(destination.owner, ship.owner, api)))
                 or distanceSquared(state, ship.patrolTile, candidate.tileId) > patrolRange then continue end
             -- PF044 Trade Guild (PremiumItems.tradeSafe): its owner's ships near its owner's Ports can't be taken
-            if state.premium and state.premium.guildActive and state.premium.tradeSafe(state, candidate) then continue end
+            -- (guildSaved: the Shipping Co. "saved" fx, PF - 4; debounced per ship)
+            if state.premium and state.premium.guildActive and state.premium.tradeSafe(state, candidate) then
+                if state.premium.guildSaved then state.premium.guildSaved(state, candidate, ship) end
+                continue
+            end
         end
         local priority = if typ == "Transport" then 0 elseif typ == "Warship" then 1 else 2
         if best == nil or priority < bestPriority or (priority == bestPriority and entry.distSquared < bestDistance) then

@@ -47,8 +47,19 @@ function M.start()
         local t=o.target
         return tonumber(t.land),tonumber(t.troops),tonumber(t.gold)
     end
+    -- UI audit build-out (UiMotion): the card pops .94 -> 1 as it shows; the price key breathes while the offer runs
+    local okMotion,Motion=pcall(function() return require(script.Parent.UiMotion) end)
+    local breathing: (()->())?=nil
     local function show(on: boolean)
+        local was=card.Visible
         card.Visible=on;End.setRevive(on)
+        if not okMotion or type(Motion)~="table" or type(Motion.open)~="function" then return end
+        if on and not was then
+            Motion.open(card)
+            if breathing then breathing() end
+            local key=if card.KeyPaid.Visible then card.KeyPaid else card.KeyFree
+            breathing=Motion.breathe(key)
+        elseif not on and breathing then breathing();breathing=nil end
     end
     local function close() offer=nil;pending=false;show(false) end
     -- an offer that ENDS (expired / closed by the server): the card holds .9 s with its keys dead ("Offer ended") before the
@@ -98,7 +109,10 @@ function M.start()
     local function revive()
         if not offer or pending or ending or guarded() then return end
         if offer.cost=="robux" then
-            if type(offer.productId)=="number" and offer.productId>0 then pcall(function() Market:PromptProductPurchase(player,offer.productId) end) end
+            if type(offer.productId)=="number" and offer.productId>0 then
+                pcall(function() require(script.Parent.StatsReport).prompt("revive","revive") end) -- STATS v3
+                pcall(function() Market:PromptProductPurchase(player,offer.productId) end)
+            end
         else
             pending=true
             remotes.Command:FireServer({kind="Revive",matchId=offer.matchId,offerId=offer.offerId})
@@ -126,7 +140,20 @@ function M.start()
         end)
         task.delay(3,function() if not done then done=true;conn:Disconnect() end end)
     end)
-    bind(card.Keys.Return,function() decline();End.run("requestReturn") end)
+    -- MM 2026-10-27 (rule: leaving feeds the requeue): declining goes straight into the next match where there is one (Solo
+    -- restarts on this server, a public match requeues); else back to the lobby as before
+    bind(card.Keys.Return,function()
+        if ending or guarded() then return end
+        decline()
+        if not End.playAgain() then End.run("requestReturn") end
+    end)
+    local returnLabel=card.Keys.Return:FindFirstChild("Label",true)
+    local returnText=if returnLabel and returnLabel:IsA("TextLabel") then returnLabel.Text else nil
+    local function paintReturn()
+        if not (returnLabel and returnLabel:IsA("TextLabel")) then return end
+        local text=if End.canPlayAgain() then "Play again" else returnText
+        if text and returnLabel.Text~=text then returnLabel.Text=text end
+    end
     -- ---------------------------------------------------------------- the in-match moments (author-pivot-revive v2)
     -- Revived: the camera on the new pocket (Locate's own centre, via MatchPacketFeed.context), the banner with the shield
     -- draining, a cyan ring round the pocket on the map; ReviveShieldDown: "Shield down", the ring goes; ReviveNotice (anyone
@@ -226,7 +253,8 @@ function M.start()
                 end
             end
             offer=packet;pending=false;endsAt=workspace:GetServerTimeNow()+math.max(1,tonumber(packet.seconds) or 15);appearedAt=os.clock()
-            show(true);paint()
+            paint();show(true);paintReturn() -- (painted first: show breathes the key the offer uses)
+            pcall(function() require(script.Parent.StatsReport).seen("revive","revive") end) -- STATS v3 (a Takeover is the same offer)
         elseif kind=="Revived" then
             if offer then close() end
         elseif kind=="ReviveClosed" then

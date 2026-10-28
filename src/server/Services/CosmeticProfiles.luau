@@ -134,6 +134,8 @@ function Methods.snapshot(self: any, userId: number, message: string?, requestId
     local record=profile.record
     local passes={}
     for _,pass in self.catalog.passes or {} do if record.owned[pass.id]==true then passes[pass.key]=true end end
+    -- retired passes (off sale) still count for their owners: a Custom Flag owner keeps their flag (2026-10-27)
+    for _,pass in self.catalog.retiredPasses or {} do if record.owned[pass.id]==true then passes[pass.key]=true end end
     local vip=passes.VIP==true
     return {kind="Cosmetics",balance=record.balance,owned=copy(record.owned),equipped=self:looks(record),revision=record.revision,loaded=profile.loaded,failed=profile.failed,message=message,requestId=requestId,
         arsenal=if self.arsenal then {owned=self.arsenal.owned(record.owned)} else nil, -- PF044: the unlocked Arsenal items

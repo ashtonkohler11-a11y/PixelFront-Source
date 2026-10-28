@@ -5,6 +5,7 @@
 -- the profile schema is unchanged and a Cobalt unlock is one wallet transaction.
 --   items  (shelf order) {id, name, set, cobalt, robux, productId (0 = no Robux product yet), prestige}
 --   packs  {id, name, set, items = {ids}, cobalt (bonus), robux, productId}; Robux only
+--   retiredPacks: off sale; only forProduct still finds them, so an old receipt grants what was bought
 local Config=require(script.Parent.Config)
 local Catalog={}
 Catalog.PREFIX="arsenal_"
@@ -20,6 +21,13 @@ for _,raw in Config.Arsenal.Packs do
     table.insert(packs,pack);byId[pack.id]=pack
     if pack.productId>0 then byProduct[pack.productId]=pack end
 end
+local retiredPacks={}
+for _,raw in Config.Arsenal.RetiredPacks or {} do
+    local pack=table.freeze({id=raw.Id,name=raw.Name,set=raw.Set,items=raw.Items,cobalt=raw.Cobalt,robux=raw.Robux,productId=product(raw.ProductId),kind="pack",retired=true})
+    table.insert(retiredPacks,pack)
+    if pack.productId>0 and not byProduct[pack.productId] then byProduct[pack.productId]=pack end
+end
+Catalog.retiredPacks=table.freeze(retiredPacks)
 Catalog.items=table.freeze(items)
 Catalog.packs=table.freeze(packs)
 Catalog.byId=table.freeze(byId)

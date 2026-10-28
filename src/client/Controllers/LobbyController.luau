@@ -234,7 +234,10 @@ end
 -- (LobbySettingsModel.soloConfig) and starts through the same attempt/overlay/finishStart path.
 function Methods:startConfig(config: any): boolean
     if self.starting or type(config)~="table" then return false end
+    -- Play again hands a running match's config back: only its settings go (the server refuses unknown keys)
+    config=Settings.settingsOnly(config) or config
     self.starting=true;self.attempt+=1;self.overlayAttempt=self.attempt
+    do local ok,Cover=pcall(require,script.Parent.TeleportCover);if ok then Cover.map(config.gameMap,"Solo") end end -- a Solo start's hop shows its map
     self.root.Starting.Message.Text=Text.text("game_settings.starting");self.root.Starting.Visible=true
     if self.callbacks.start then self.callbacks.start(config,self.attempt) end
     return true
@@ -255,7 +258,7 @@ end
 -- The boot cover (PF - 2: every hub player hears FirstMatch or Lobby soon after join): until then the Joining screen with its
 -- panel hidden keeps a new player from seeing the menu flash. Lobby lifts it; FirstMatch turns it into "Joining your match";
 -- it also lifts when a match takes the screen (Studio plays on this server) and after COVER_GIVE_UP s without word.
-Lobby.COVER_GIVE_UP=8
+Lobby.COVER_GIVE_UP=12 -- past the server's verdict cap (Onboarding.WAIT_SECONDS 10 s from join), so the menu never flashes first
 function Methods:cover(): any?
     if self.firstMatch then return self.firstMatch end
     local ok,Joining=pcall(require,script.Parent.JoiningView)
@@ -291,6 +294,7 @@ function Methods:splash(phase: string?,message: string?,map: string?)
             self.covering=false
             if view.panel then view.panel.Visible=true end
             if type(map)=="string" and map~="" then view:map(map,"Your first match") end
+            do local ok,Cover=pcall(require,script.Parent.TeleportCover);if ok then Cover.map(map,"Your first match") end end -- the hop shows it too
         end
         return
     end

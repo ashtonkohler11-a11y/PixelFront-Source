@@ -10,14 +10,16 @@ local RunService=game:GetService("RunService")
 local TweenService=game:GetService("TweenService")
 local TeleportService=game:GetService("TeleportService")
 local Icons=require(script.Parent.ReferenceIcons)
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- build-out motion (PF - 4's shared module)
+local Motion: any=if okMotion and type(UiMotion)=="table" then UiMotion else nil
 local View={};View.__index=View
 View.READY_HOLD=.35 -- seconds the three green steps show before the fade
 View.FADE=.45
 View.GIVE_UP=90 -- seconds without a match packet: the overlay steps aside (the server returns a failed start to the hub)
 View.STEPS={"Connecting","Map","Ready"}
--- maps without one-part lobby art: an uploaded land render, keyed by the map's name without spaces (work/loading/honshu;
--- the seven two-part maps, MM 2026-10-14: work/loading/maps, ASSETS.md)
-View.ART={Honshu="rbxassetid://110168883331637",AmazonRiver="rbxassetid://133045157023174",ChannelIslands="rbxassetid://134123163709950",
+-- maps without one-part lobby art: an uploaded land render, keyed by the map's name without spaces (the seven two-part
+-- maps, MM 2026-10-14: work/loading/maps, ASSETS.md; Honshu's render left with the map, 2026-10-27)
+View.ART={AmazonRiver="rbxassetid://133045157023174",ChannelIslands="rbxassetid://134123163709950",
     GiantWorldMap="rbxassetid://86853238312554",LasVegasStrip="rbxassetid://116116908622650",MississippiRiver="rbxassetid://81792382689289",
     Passage="rbxassetid://117538832449661",Sol="rbxassetid://140304437184953"}
 local GREEN,COBALT,PENDING,WELL=Color3.fromHex("#7ee08a"),Color3.fromHex("#3678ff"),Color3.fromHex("#3a3d44"),Color3.fromHex("#1f2a44")
@@ -33,11 +35,12 @@ function View.new(gui: Instance,o: any): any
     if not root or not root:IsA("GuiObject") or not (o.force or View.isMatchServer()) then if root and root:IsA("GuiObject") then root.Visible=false end;self.root=nil;return self end
     self.panel=root:FindFirstChild("Panel")
     root.Visible=true
-    -- Solo and tutorial runs know their map from the teleport (Solo carries its config; the tutorial is always Honshu)
+    -- Solo and tutorial runs know their map from the teleport (Solo carries its config; the first match is always the
+    -- Compact United States: MatchService.tutorialConfig, 2026-10-26)
     local ok,data=pcall(function() return TeleportService:GetLocalPlayerTeleportData() end)
     if ok and type(data)=="table" then
         if type(data.config)=="table" and type(data.config.gameMap)=="string" then self:map(data.config.gameMap,mode(data.config))
-        elseif data.kind=="tutorial" then self:map("Honshu","Tutorial") end
+        elseif data.kind=="tutorial" then self:map("United States","Tutorial") end
     end
     self:setStep(1)
     table.insert(self.connections,RunService.RenderStepped:Connect(function() self:tick() end))
@@ -51,8 +54,8 @@ function View:map(name: string,modeText: string?)
     local sub=self.panel and self.panel:FindFirstChild("Sub")
     if sub and sub:IsA("TextLabel") then sub.Text=if modeText then name.." · "..modeText else name;sub.Visible=true end
     -- the map's land over the authored ocean base (MM r2: the map on its sea, like the board): the lobby's art for it
-    -- (LobbyMap<Name>Part1, the Play cards' source) when it is one part, drawn Fit so the whole map shows centred; Honshu
-    -- (the tutorial, no lobby art) and the two-part maps have their own land renders (View.ART).
+    -- (LobbyMap<Name>Part1, the Play cards' source) when it is one part, drawn Fit so the whole map shows centred; the
+    -- two-part maps have their own land renders (View.ART).
     local art=self.root:FindFirstChild("Art");local image=art and art:FindFirstChild("Map")
     if not image or not image:IsA("ImageLabel") then return end
     local bare=string.gsub(name,"[^%w]","")
@@ -66,17 +69,27 @@ end
 -- step i (1 connecting, 2 map, 3 ready): done steps green, the running one cobalt with its word, the rest dim
 function View:setStep(i: number)
     if not self.panel or self.step==i then return end
+    local was=self.step
     self.step=i
     for n=1,3 do
         local node=self.panel:FindFirstChild("Step"..n);if not node then continue end
         local done=n<i or i>=3;local running=n==i and i<3
-        local disc=node:FindFirstChild("Done");if disc and disc:IsA("GuiObject") then disc.Visible=done end
+        -- build-out (queue.joining): a step that just finished pops its check 1.3 -> 1 (.2 s Back) and wipes its track in
+        local fresh=done and was~=nil and not (n<was or was>=3)
+        local disc=node:FindFirstChild("Done");if disc and disc:IsA("GuiObject") then disc.Visible=done;if fresh and Motion then Motion.pop(disc,1.3,.2) end end
         local icon=node:FindFirstChild("Icon");if icon and icon:IsA("ImageLabel") then icon.Visible=not done;icon.ImageColor3=if running then Color3.new(1,1,1) else Color3.fromHex("#6d717a") end
         local ring=node:FindFirstChild("Ring");local stroke=ring and ring:FindFirstChildOfClass("UIStroke")
         if stroke then stroke.Color=if running then COBALT else PENDING;stroke.Transparency=if done then 1 else 0;local arc=stroke:FindFirstChildOfClass("UIGradient");if arc then arc.Enabled=running end end
         local word=self.panel:FindFirstChild("Word"..n);if word and word:IsA("GuiObject") then word.Visible=running end
         local track=self.panel:FindFirstChild("Track"..n);local fill=track and track:FindFirstChild("Fill")
-        if fill and fill:IsA("GuiObject") then fill.Visible=n<i or i>=3;fill.BackgroundColor3=GREEN end
+        if fill and fill:IsA("GuiObject") then
+            fill.Visible=n<i or i>=3;fill.BackgroundColor3=GREEN
+            if fresh and fill.Visible and Motion and not Motion.reduced(fill) then
+                local rest=fill:GetAttribute("PFRestSize");if typeof(rest)~="UDim2" then rest=fill.Size;fill:SetAttribute("PFRestSize",rest) end
+                local full: UDim2=rest :: any
+                fill.Size=UDim2.new(0,0,full.Y.Scale,full.Y.Offset);Motion.tween(fill,{Size=full},.25)
+            end
+        end
     end
     local title=self.panel:FindFirstChild("Title")
     if title and title:IsA("TextLabel") then title.Text=if i>=3 then "Ready" else "Joining your match";title.TextColor3=if i>=3 then GREEN else Color3.fromHex("#f2f2f2") end

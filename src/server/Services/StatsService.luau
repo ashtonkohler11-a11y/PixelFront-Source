@@ -13,6 +13,9 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Remotes = require(Shared.Remotes)
 local Stats = require(script.Parent.StatsProfiles)
 local okAnalytics, AnalyticsModule = pcall(require, script.Parent.AnalyticsHooks) -- PF037
+-- stats v3: the per-player record + daily totals ride the same moment (PlayerProfileService; absent = nothing extra)
+local okProfiles, ProfilesModule = pcall(require, script.Parent.PlayerProfileService)
+local Profiles: any = if okProfiles then ProfilesModule else nil
 local Analytics: any = if okAnalytics then AnalyticsModule else nil
 local Service = {}
 Service.STORE = "OpenFrontStats_v1"
@@ -109,6 +112,10 @@ function Service.record(info: any)
     local ok, entry = pcall(Stats.entry, copy)
     if ok and entry then write(info.userId, entry)
     elseif not ok then warn("[OpenFront] Stats entry failed: " .. tostring(entry)) end
+    if Profiles then
+        local okProfile, failure = pcall(Profiles.match, copy)
+        if not okProfile then warn("[OpenFront] Player record failed: " .. tostring(failure)) end
+    end
 end
 
 -- PIVOT D15: a player's lifetime matches (cached for players on this server; otherwise read from the store); nil when unknown.

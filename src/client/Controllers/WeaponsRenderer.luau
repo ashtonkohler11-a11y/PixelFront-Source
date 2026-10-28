@@ -19,6 +19,7 @@ local Shockwave=require(script.Parent.ShockwaveRenderer)
 local FxRanks=require(script.Parent.StockFxMath).fxRanks
 local SpriteFx=require(script.Parent.SpriteFxRenderer)
 local Sprites=require(script.Parent.PF040Sprites) -- PF-040: the baked pixel rings, the intercept mark
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local KINDS={["Atom Bomb"]="AtomBomb",["Hydrogen Bomb"]="HydrogenBomb",MIRV="MIRV",SAMMissile="SAMMissile",["MIRV Warhead"]="MIRVWarhead"}
 local SIZES={AtomBomb=13,HydrogenBomb=13,MIRV=13,SAMMissile=13,MIRVWarhead=3}
 -- Blast radii {inner, outer} from Config.Nuclear (PixelFront x0.7 of the source 12/30, 80/100, 12/18; PF-033).
@@ -383,7 +384,8 @@ function Renderer:drawUnit(r: any,state: any,now: number,zoom: number,visible: (
 end
 function Renderer:draw(zoom: number,viewport: Frame)
     if not self.state then return end
-    local state=self.state;local now=os.clock();local time=now-self.started;local offset=self.world.AbsolutePosition-viewport.AbsolutePosition;local size=viewport.AbsoluteSize
+    local state=self.state;local now=os.clock();local time=now-self.started;local offset=if okGeo then Geo.offset(self.world,viewport) else self.world.AbsolutePosition-viewport.AbsolutePosition
+    local size=if okGeo then Geo.viewportSize(viewport) else viewport.AbsoluteSize
     local function visible(x: number,y: number,margin: number): boolean x+=offset.X;y+=offset.Y;return x>=-margin and y>=-margin and x<=size.X+margin and y<=size.Y+margin end
     -- PF020: each missile is drawn under a guard: an error or a non-finite position hides that
     -- visual (logged once per unit) and it is retried on its next movement segment, instead of

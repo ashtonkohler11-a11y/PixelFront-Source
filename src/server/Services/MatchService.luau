@@ -16,8 +16,12 @@ local Diplomacy = require(Shared:WaitForChild("OpenFrontDiplomacy"))
 local Performance = require(Shared:WaitForChild("Performance"))
 local TutorialProgress=require(Shared.TutorialProgress)
 local SendDebounce=require(Shared:WaitForChild("SendDebounce")) -- PF043: a repeat troop send inside 1 s is dropped
+local NewPlayerGuard=require(Shared:WaitForChild("NewPlayerGuard")) -- release: a new player's rapid repeat sends shrink
 local Premium=require(Shared:WaitForChild("PremiumItems")) -- PF044 Arsenal in match (Phase 1: Industry buildings)
 local ReviveService=require(script.Parent:WaitForChild("ReviveService")) -- PF044 Revive offers
+local Dealer=require(Shared:WaitForChild("OpenFrontDealer")) -- stats v3 opportunity dealer (Config.Dealer)
+-- stats v3: the win card's Next difficulty (PF - 1's button sends LobbyStart with this difficulty)
+local NEXT_DIFFICULTY={Easy="Medium",Medium="Hard",Hard="Impossible"}
 local HttpService=game:GetService("HttpService")
 local AnalyticsService=game:GetService("AnalyticsService")
 local MatchScheduler = require(script.Parent:WaitForChild("MatchScheduler"))
@@ -103,7 +107,28 @@ local function reset(context: any, seed: number, gameConfig: any?, tutorial: boo
     endLevels(context,false) -- a match restarted or replaced before it ended still pays what it earned
     if context.tutorial then tutorialReport("finish",context,"Restarted") end -- PF034: a restart or a new match ends the attempt
     local config=gameConfig or context.gameConfig or LobbySettings.availableConfig()
+    -- stats v3 (STATS-SYSTEM-DESIGN v3): the player's band and cohort (PlayerProfileService, loaded on join), whether this
+    -- match came from the Next difficulty button, and the dealer: Solo, cohort A, Config.Dealer.Enabled only (OFF in the
+    -- record-only phase); a Cruising player's nation peace is 30 s shorter
+    local profile=nil
+    if not tutorial and context.player then
+        local okProfiles,Profiles=pcall(require,script.Parent.PlayerProfileService)
+        if okProfiles then local okCached,cached=pcall(Profiles.cached,context.player.UserId);if okCached then profile=cached end end
+    end
+    local band=if profile then profile.band else "Flow"
+    local difficulty=type(config)=="table" and config.difficulty or nil
+    local fromNext=not tutorial and context.nextDifficulty~=nil and difficulty==context.nextDifficulty
+    context.nextDifficulty=nil
+    local dealerOn=Config.Dealer.Enabled and not tutorial and profile~=nil and profile.cohort=="A" and SoloDifficulty.Modes[difficulty]~=nil
+    local peaceCut=false
+    if dealerOn and band=="Cruising" and type(config.mercySeconds)=="number" and config.mercySeconds>0 then
+        config=table.clone(config);config.mercySeconds=math.max(0,config.mercySeconds-Config.Dealer.PeaceCut);peaceCut=true
+    end
     local nextState=Simulation.new(seed,nil,{humanName=context.playerName,gameConfig=config,matchBalance=true})
+    if dealerOn then
+        nextState.dealer=Dealer.new(1,band,difficulty,seed+7919)
+        if peaceCut then nextState.dealer.log.peace=1 end
+    end
     -- PF044: the Arsenal items this player unlocked, fixed at the match's start (Solo; never the tutorial; owner 1 is the human)
     if not tutorial and context.player then
         local okService,Cosmetics=pcall(require,script.Parent.CosmeticService)
@@ -111,6 +136,16 @@ local function reset(context: any, seed: number, gameConfig: any?, tutorial: boo
         if owned then Premium.grant(nextState,1,owned) end
     end
     context.premiumSent=nil
+    NewPlayerGuard.reset(context) -- a new match starts every send streak fresh
+    -- Early-wipe fix: a new player (first NewPlayerGuard.Matches matches; the first match always) is off-limits to nations
+    -- for Config.Combat.NewPlayerGrace.Seconds after spawning (Simulation.newPlayerGraced). Solo is never Ranked.
+    if context.player then
+        local okMatches,matches=pcall(function() return context.player:GetAttribute("OpenFrontMatches") end)
+        -- the first match (the tutorial, or no match recorded yet) gets the longer FirstMatchSeconds window
+        if tutorial or NewPlayerGuard.eligible(if okMatches then matches else nil, false) then
+            nextState.newPlayerGrace={[1]=if tutorial or (okMatches and matches==0) then Config.Combat.NewPlayerGrace.FirstMatchSeconds else true}
+        end
+    end
     -- PF044 Revive: a Solo match (never the tutorial) stays open after owner 1's elimination until its offer resolves
     if context.reviveOffer then ReviveService.close(context.reviveOffer,"expired") end
     context.reviveOffer,context.reviveKiller,context.reviveShieldSent=nil,nil,nil
@@ -132,7 +167,13 @@ local function reset(context: any, seed: number, gameConfig: any?, tutorial: boo
     context.gameConfig=config
     if nextTutorial then tutorialReport("begin",context) end -- PF034: this attempt's report starts now
     -- PF023: a fresh XP tracker per match (not the tutorial, which pays its own reward)
-    context.levelFacts=if levels and not tutorial then levels.newFacts(nextState,config,1,{solo=true}) else nil
+    context.levelFacts=if levels and not tutorial then levels.newFacts(nextState,config,1,{solo=true,skill={
+        hint=(function() -- the opening hint: Easy/Medium, not learned, under 5 matches (SkillFacts.hintAllowed)
+            local okSkill,Skill=pcall(require,script.Parent.SkillFacts)
+            local okMatches,matches=pcall(function() return context.player:GetAttribute("OpenFrontMatches") end)
+            return okSkill and Skill.hintAllowed(Config.Dealer.OpeningHint,difficulty,profile~=nil and profile.opening==true,if okMatches then matches else nil)
+        end)(),
+        learned=profile~=nil and profile.opening==true,bandStart=if profile then band else nil,next=fromNext}}) else nil
     context.levelKey=if context.levelFacts then "solo:"..tostring(game.JobId~="" and game.JobId or "studio")..":"..tostring(nextMatchId) else nil
     context.levelGranted,context.xpResult=false,nil
     -- Decode the immutable World graph during match bootstrap, never on the
@@ -155,8 +196,11 @@ end
 -- camera was still centring. Presence is now per match: the client's SpawnView (MatchController, once its camera frames
 -- this match's map) for this matchId; the fallbacks (no SpawnView: a stalled loader) start the clock anyway after
 -- TUTORIAL_LOAD_GRACE (tutorial) or SOLO_VIEW_GRACE (Solo) of Choosing. loadedAt stays for TutorialReport.
+-- UI audit build-out (MM 2026-10-28: 15 s everywhere, counted from when the map is visible): Solo's net was 8 s from the
+-- server's reset, which on a hosted server is the player's arrival, so a phone still loading had its clock started before it
+-- saw the map. Both nets are 20 s now (only a stalled client ever reaches them); the client's SpawnView waits for the map.
 local TUTORIAL_LOAD_GRACE = 20
-local SOLO_VIEW_GRACE = 8
+local SOLO_VIEW_GRACE = 20
 local function soloPresent(context: any): { number }
     if context.spawnViewMatch ~= nil and context.spawnViewMatch == context.matchId then return { 1 } end
     local grace = if context.tutorial then TUTORIAL_LOAD_GRACE else SOLO_VIEW_GRACE
@@ -184,6 +228,14 @@ local function tutorialPacket(context: any): any?
     else context.spawnHint=nil end
     return packet
 end
+-- the difficulty a Solo win offers next (remembered: the next match's reset knows it came from the button)
+local function nextDifficulty(context: any): string?
+    local state,config=context.state,context.gameConfig
+    if context.tutorial or not state or state.phase~="Won" or not context.levelFacts or type(config)~="table" then return nil end
+    local offered=NEXT_DIFFICULTY[config.difficulty]
+    context.nextDifficulty=offered
+    return offered
+end
 local function envelope(player: Player, context: any): any
     local timing = Performance.start()
     local snapshot = Simulation.snapshot(context.state, false, false)
@@ -208,6 +260,11 @@ local function envelope(player: Player, context: any): any
         hosted=if context.hosted then true else nil, -- this player's own Solo/Tutorial server
         xpResult=context.xpResult, -- the match's end result for the card (MatchRewardsService: cobalt, lines, the 2x chip)
         choosing=choosingPacket(context), -- PF030: {deadlineTick, present, picked, allPicked, you} while Choosing
+        -- early-wipe fix (PF - 1's alert): the first attack on you this match, {tick, by (owner)}; nil until it happens
+        firstAttacked=context.state.firstAttacked and context.state.firstAttacked[1] or nil,
+        -- stats v3 (PF - 1): the win card's Next difficulty (a Solo win below Impossible) and the opening hint {id, target, name}
+        nextDifficulty=nextDifficulty(context),
+        openingHint=if context.levelFacts and context.levelFacts.skill then context.levelFacts.skill:hintPacket() else nil,
 
         state = encoded,
         profileSentAt = if Performance.enabled() then workspace:GetServerTimeNow() else nil,
@@ -480,6 +537,30 @@ local function applyCommand(context: any, entry: any)
             if request.terrain == true then context.wholeTerrain = true end
             send(player, context)
         end
+        return
+    end
+    -- UI audit build-out (PF - 1's end card, R9): Studio's local lobby tutorial takes Play again the same way once its match
+    -- has ended (won, lost or eliminated; live always runs the tutorial on the player's own server, below). A start while
+    -- it's still running is refused as before (a late lobby start never replaces an active tutorial).
+    local studioTutorial=request.kind=="LobbyStart" and context.lobbyTutorialToken~=nil and context.tutorial~=nil and not context.hosted
+        and context.state~=nil and (context.state.phase=="Won" or context.state.phase=="Lost"
+            or context.state.phase=="Playing" and (context.state.counts and context.state.counts[1] or 0)==0)
+    if request.kind=="LobbyStart" and context.state and (context.hosted and GlobalLobbyService.isReserved() or studioTutorial) then
+        -- MM 2026-10-27 (rule: leaving feeds the requeue): Play again on the player's own Solo / Tutorial server is a fresh
+        -- Solo match HERE, no hop home and back (this server only ever admits this one player). The tutorial's first-match
+        -- edge (humanStartingGold) never carries over; a client-sent one (or a spawnPhaseSeconds) is dropped too.
+        local attempt=request.attempt
+        if type(attempt)~="number"or attempt%1~=0 or attempt<1 or attempt>9007199254740991 or attempt<=context.startAttempt then return end
+        if context.returning then return end
+        context.startAttempt=attempt
+        local config=if type(request.config)=="table" then table.clone(request.config) else table.clone(context.gameConfig or {})
+        config.humanStartingGold=nil;config.spawnPhaseSeconds=nil
+        local ok,reason=pcall(reset,context,Config.Map.DefaultSeed,SoloDifficulty.apply(config))
+        if ok and studioTutorial then
+            local token=context.lobbyTutorialToken;context.lobbyTutorialToken=nil;GlobalLobbyService.finishTutorial(player,token)
+        elseif ok then context.hosted="solo";context.lobbyTutorialToken=nil end
+        if player.Parent==Players then remote.State:FireClient(player,{kind="LobbyStarted",attempt=attempt,ok=ok,message=if ok then nil else tostring(reason)})end
+        if ok then send(player,context)end
         return
     end
     if request.kind=="LobbyStart"then
@@ -763,18 +844,20 @@ local function applyCommand(context: any, entry: any)
         ok, message = Simulation.chooseSpawn(context.state, request.targetId)
     elseif SendDebounce.blocked(context, 1, request.kind, now) then
         return -- PF043: silently; the client mirrors the debounce and never sent its own repeat
-    elseif request.kind == "Attack" then
-        ok, message, reserve = Simulation.attack(context.state, 1, request.targetId, request.ratio)
-    elseif request.kind == "Boat" then
-        ok, message, reserve = Simulation.boat(context.state, 1, request.targetId, request.ratio)
+    elseif NewPlayerGuard.KINDS[request.kind] then
+        -- release (PF - 4's NewPlayerGuard, Ashton-approved): a new player's rapid repeat sends shrink; Solo is never ranked
+        local ratio, guard = NewPlayerGuard.apply(context, 1, request.kind, request.ratio, context.state.troops[1] or 0, now,
+            NewPlayerGuard.eligible(player:GetAttribute("OpenFrontMatches"), false))
+        if request.kind == "Attack" then ok, message, reserve = Simulation.attack(context.state, 1, request.targetId, ratio)
+        elseif request.kind == "Boat" then ok, message, reserve = Simulation.boat(context.state, 1, request.targetId, ratio)
+        else ok, message, reserve = Simulation.retaliate(context.state, 1, request.attackId, ratio) end
+        if ok and guard and player.Parent == Players then remote.State:FireClient(player, guard) end
     elseif request.kind == "BoatRetreat" then
         ok, message = Simulation.boatRetreat(context.state, 1, request.unitId)
     elseif request.kind == "MoveWarship" then
         ok, message = Simulation.moveWarships(context.state, 1, request.unitIds, request.targetId)
     elseif request.kind == "Cancel" then
         ok, message = Simulation.cancel(context.state, 1, request.attackId)
-    elseif request.kind == "Retaliate" then
-        ok, message, reserve = Simulation.retaliate(context.state, 1, request.attackId, request.ratio)
     elseif request.kind=="QuickChat" then
         ok,message=Simulation.quickChatCommand(context.state,1,request)
     elseif request.kind=="AllianceRequest" or request.kind=="AllianceReject" or request.kind=="AllianceExtend"
@@ -786,7 +869,7 @@ local function applyCommand(context: any, entry: any)
     elseif request.kind == "LaunchPremium" then -- PF044 Phase 3: Airdrop / Blitz / Titan (unitType) at targetId
         ok, message = Premium.launch(context.state, 1, request.unitType, request.targetId)
     elseif request.kind == "UsePremium" then -- premium reshuffle: Train (training_camp) / Invest (stock_exchange), one tap
-        ok, message = Premium.use(context.state, 1, request.unitType)
+        ok, message = Premium.use(context.state, 1, request.unitType, request.amount) -- Invest: amount = the picked stake (nil = the max)
     elseif request.kind == "Build" then
         if request.unitType == "City" then ok, message = Simulation.buildCity(context.state, 1, request.targetId)
         elseif request.unitType == "Port" then ok, message = Simulation.buildPort(context.state, 1, request.targetId)
@@ -808,7 +891,8 @@ local function applyCommand(context: any, entry: any)
     end
     -- PF014: a reduced or refused send shows only the small dock hint, never a toast.
     if reserve and player.Parent == Players then
-        remote.State:FireClient(player, { kind = "ReserveNotice", kept = reserve.kept, sent = reserve.sent, refused = reserve.refused == true })
+        remote.State:FireClient(player, { kind = "ReserveNotice", kept = reserve.kept, sent = reserve.sent, refused = reserve.refused == true,
+            newPlayer = NewPlayerGuard.eligible(player:GetAttribute("OpenFrontMatches"), false) }) -- PF - 4: the once-per-match new-player toast
     elseif message and (not ok or request.kind == "Debug") then notice(player, message, not ok) end -- PF043: refused = the u_error sound
     if ok and context.levelFacts and levels and levels.isGameplay(request.kind) then context.levelFacts:command(os.clock()) end -- PF023: active
     if ok then SendDebounce.stamp(context, 1, request.kind, now) end -- PF043: only an accepted send starts the 1 s

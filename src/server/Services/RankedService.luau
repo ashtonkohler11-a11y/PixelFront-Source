@@ -470,6 +470,8 @@ function Service.wrap(api: any): any
     for name, value in api do wrapped[name] = value end
     local stats = api.stats
     wrapped.stats = function(info: any)
+        -- stats v3: the player record files this match under Ranked (PlayerProfile.matchEntry)
+        if match and type(info) == "table" and info.key == match.key then info.ranked = true end
         if stats then stats(info) end
         local ok, failure = pcall(Service.result, info)
         if not ok then warn("[OpenFront] Ranked: " .. tostring(failure)) end

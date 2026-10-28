@@ -15,7 +15,10 @@ return table.freeze({
         BotStartingTroops = 10000,
         SpawnRadius = 4,
         SpawnImmunityTicks = 50,
-        SpawnPhaseSeconds = 30, -- PF030: the spawn phase lasts at most this long in every mode (Simulation.stepChoosing)
+        -- PF030 spawn phase; Ashton 2026-10-27 ("you spawn in with a view of the whole map, 15s timer to place if you dont
+        -- place places u in a good spot"): 15 s in every mode (Ranked too); a match may ask for up to SpawnPhaseMaxSeconds
+        SpawnPhaseSeconds = 15,
+        SpawnPhaseMaxSeconds = 30,
         MinSpawnDistance = 30,
         MaxSpawnTries = 1000,
         RelaxSpawnDistanceAt = 750,
@@ -56,6 +59,19 @@ return table.freeze({
             -- MM / Ashton (RoWorld: 4 fronts, home ~22% of max): FrontsMin+ outgoing attacks with home troops under
             -- FrontsHome of max show the once-per-match reserve tip (DiplomacyController.frontsTip)
             FrontsMin = 3, FrontsHome = 0.25 }),
+        -- Early-wipe fix (Ashton 2026-10-27, approved: "even bad users shouldnt be too weak too die 2.5m in seconds"; measured:
+        -- an idle or slow human hit at ~2-2.5 min was wiped in 0-25 s). NewPlayerGrace: for a player's first
+        -- NewPlayerGuard.Matches matches (never Ranked), nations don't attack them for Seconds after they spawn
+        -- (Simulation.mercyShield; servers set state.newPlayerGrace). SmallTarget, for every human: an attack on a human
+        -- holding at most MaxTiles takes their land at most at max(MinTilesPerSecond, their land at the attack's start /
+        -- ReactSeconds) tiles a second, and isn't defeated outright under DefeatedTerritory while slowed (tile by tile), so
+        -- even a lost fight leaves ~ReactSeconds to answer. Bigger players: unchanged.
+        -- FirstMatchSeconds (UI audit build-out 2026-10-28, PF - 1's capture: a passive player in the tutorial was hit by a
+        -- nation at ~4:00 and wiped at ~4:30, still on step 2): the player's first match (the tutorial, or 0 recorded
+        -- matches) holds nations off this long instead.
+        NewPlayerGrace = table.freeze({ Seconds = 180, FirstMatchSeconds = 360 }),
+        -- (MaxTiles 6000 after the first measure: a slow player at ~3,900 tiles still fell in 3 s at 3000)
+        SmallTarget = table.freeze({ MaxTiles = 6000, ReactSeconds = 18, MinTilesPerSecond = 3 }),
     }),
     -- SinglePlayerModal defaults:400 tribes, plus World manifest nations.
     Bot = table.freeze({ Count = 400 }),
@@ -184,7 +200,7 @@ return table.freeze({
         }),
         LoadCap = 30,
         VoteDelay = 5,
-        SpawnPhaseSeconds = 20, -- PF044 (Ashton: "theres a 20s timer to place"): a public match's spawn phase (others: Match.SpawnPhaseSeconds)
+        SpawnPhaseSeconds = 15, -- a public match's spawn phase (PF044 20 s; Ashton 2026-10-27: 15 s everywhere)
     }),
     -- PIVOT 2026-10-23 (docs/director/PIVOT-2026-10-23.md §0b): "Daily challenges: REMOVED"; only the daily login reward (the
     -- 7-day streak) stays, and it opens on its own on join while claimable. Challenges=false: no challenge progress, packets
@@ -202,13 +218,15 @@ return table.freeze({
     --   Ashton 2026-10-24 (via MM): x4 on every flat amount (between ours and RoFront's; the cheapest premium item, 20K, ~90 matches).
     MatchCobalt = table.freeze({ MinMinutes = 2, Played = 120, PerMinute = 20, MinuteCap = 400,
         Placement = table.freeze({ 600, 320, 200 }), TopHalf = 80, PerElimination = 40, EliminationCap = 200,
-        Solo = table.freeze({ Easy = 0.25, Medium = 0.5, Hard = 0.75, Impossible = 0.75 }), Custom = 0.5,
+        Solo = table.freeze({ Easy = 0.25, Medium = 0.5, Hard = 0.75, Impossible = 1 }), Custom = 0.5, -- Ashton 2026-10-27: Impossible = public
         DoubleMultiplier = 2, VipBonus = 0.10, DoublePass = "pass_2x_cobalt", -- the Catalog pass
         PassId = 2058856459 }), -- RELEASE: the 2x Cobalt Game Pass id (CosmeticCatalog's pass_2x_cobalt reads it; 0 = not made yet, no prompt)
     -- PF044 Arsenal (docs/director/MONETIZATION-SETS.md: Warfare v4, Industry v4; PF - 2 2026-10-24/25): premium in-match items,
     -- unlocked once per account with Cobalt or Robux (ArsenalCatalog; CosmeticProfiles UnlockArsenal / receipt). Unlock prices
     -- only: the in-match gold costs and effects are not built yet. ProductId 0 = no Developer Product yet (no Robux unlock).
     -- Packs (starter packs) are Robux-only: their Items plus Cobalt. Never for AI nations; never in Ranked.
+    -- One Starter Pack (Ashton 2026-10-27: "1 starter pack with bank maybe artillery", R$ 39): Bank + Artillery on the old
+    -- Industry Starter product id. Its Set "Starter" spans both shelves (no Armory rail group of that name).
     Arsenal = table.freeze({
         Items = table.freeze({
             -- Premium reshuffle (Ashton 2026-10-25, PREMIUM-RESHUFFLE-SPEC.md): the Warden replaces the Longshot; Barracks, Training
@@ -230,8 +248,12 @@ return table.freeze({
             table.freeze({ Id = "stock_exchange", Name = "Stock Exchange", Set = "Industry", Cobalt = 100000, Robux = 149, ProductId = 3722783655 }),
         }),
         Packs = table.freeze({
+            table.freeze({ Id = "pack_arsenal_starter", Name = "Starter Pack", Set = "Starter", Items = table.freeze({ "bank", "artillery" }), Cobalt = 0, Robux = 39, ProductId = 3722784034 }),
+        }),
+        -- Retired packs: off sale (not in ArsenalCatalog.packs), but a receipt for their product still grants what was bought
+        -- (a pending or retried purchase from before 2026-10-27), so no buyer loses items.
+        RetiredPacks = table.freeze({
             table.freeze({ Id = "pack_warfare_starter", Name = "Warfare Starter", Set = "Warfare", Items = table.freeze({ "tesla_coil", "airdrop" }), Cobalt = 10000, Robux = 49, ProductId = 3722784176 }),
-            table.freeze({ Id = "pack_industry_starter", Name = "Industry Starter", Set = "Industry", Items = table.freeze({ "bank", "engineering_yard" }), Cobalt = 0, Robux = 39, ProductId = 3722784034 }),
         }),
         -- In-match tuning (PremiumItems; Phase 1 = the Industry buildings). Gold Costs per copy (1st, 2nd, ...; Max = #Costs).
         -- Captured, an economy building (Bank, Engineering Yard, Tax Office, Shipping Co., Stock Exchange) goes to a nation/human
@@ -257,7 +279,8 @@ return table.freeze({
             engineering_yard = table.freeze({ Costs = table.freeze({ 400000 }) }),
             tax_office = table.freeze({ Costs = table.freeze({ 200000 }), GoldPerCityLevel = 200, MaxLevels = 12 }),
             trade_guild = table.freeze({ Costs = table.freeze({ 400000 }), GoldBonus = 0.12, Cap = 6000000, PayPerSecond = 1500, SafeRange = 40 }),
-            tesla_coil = table.freeze({ Costs = table.freeze({ 400000, 800000, 1600000, 3200000 }), Range = 14, ZapPercent = 0.015, ZapMin = 50,
+            -- Ashton 2026-10-27 (via MM): "make teslas range further slightly bigger than artillery": Range 14 -> 24 (Artillery 22)
+            tesla_coil = table.freeze({ Costs = table.freeze({ 400000, 800000, 1600000, 3200000 }), Range = 24, ZapPercent = 0.015, ZapMin = 50,
                 BoatPercent = 0.10, WarshipDamage = 25 }),
             artillery = table.freeze({ Costs = table.freeze({ 1000000, 2000000, 4000000 }), Range = 22, EverySeconds = 10, Percent = 0.015,
                 Decay = 2 / 3, Ceiling = 0.03, Intercept = 0.5 }), -- PF - 1 balance R17 (2026-10-25): 0.04 let a resting nation sink to 88.7% under 2+ owners' guns; 0.03 holds >= 91.4%
@@ -312,6 +335,28 @@ return table.freeze({
     -- middle half of the nations under that cap). Rules 2-4 apply with other humans; Solo has none.
     Revive = table.freeze({ ProductId = 3722783885, Price = 49, OfferSeconds = 15, BeforeSeconds = 600, NationKeep = 2000, LeaderBelow = 0.5,
         MinAlive = 4, Radius = 8, HumanClear = 6, TroopShare = 1, Gold = 50000, ShieldSeconds = 90, ZoneRadius = 25, TakeoverTop = 3 }),
+    -- Stats v3 (docs/director/STATS-SYSTEM-DESIGN-2026-10-27.md, Ashton "Build it" 2026-10-27). Skill: the hidden Solo score
+    -- S (weights sum to 1), its graded Elo and the bands; starting values, calibrated after the 2-week record-only phase.
+    Skill = table.freeze({
+        Weights = table.freeze({ result = 0.35, land = 0.15, survival = 0.10, pace = 0.05, smart = 0.15, comeback = 0.10, economy = 0.10 }),
+        WinLine = 0.8, SurvivalSeconds = 600, PaceTiles = 1000, MinAttacks = 3, KeptShare = 0.3, WonTiles = 10,
+        LowTroops = 0.3, LowLandOfPeak = 0.9, LostLandOfPeak = 0.5, RecoverTroops = 0.6,
+        GoldPerMinute = table.freeze({ Easy = 300000, Medium = 300000, Hard = 300000, Impossible = 300000 }),
+        CityBest = 180, CityWorst = 480, Buildings = 8, Alpha = 0.4,
+        Rating = table.freeze({ Start = 1000, Easy = 1000, Medium = 1200, Hard = 1400, Impossible = 1600, KNew = 64, K = 32, NewMatches = 10 }),
+        Bands = table.freeze({ Struggling = 0.35, Cruising = 0.70, CruiseStreak = 3, LossStreak = 2, EarlySeconds = 180 }),
+        -- live (in-match) band: checked every CheckSeconds, a state must hold HoldSeconds to switch on and stays KeepSeconds
+        Live = table.freeze({ CheckSeconds = 15, HoldSeconds = 60, KeepSeconds = 90, CollapseTroops = 0.3, CollapseLand = 0.8,
+            CityTroops = 0.5, RunAwayRatio = 1.5, RunAwayTroops = 0.6 }),
+    }),
+    -- The opportunity dealer (Solo only, cohort A). Enabled = false for the 2-week record-only phase (MM 2026-10-27); the
+    -- opening hint has its own switch. Cadences in seconds; Attention = the struggling human's weight in nation targeting.
+    Dealer = table.freeze({ Enabled = false, OpeningHint = false, GapSeconds = 120,
+        War = table.freeze({ Easy = 120, Medium = 120, Hard = 240, Impossible = 300, Share = 0.25 }),
+        Attention = table.freeze({ Easy = 0.5, Medium = 0.5, Hard = 0.7, Impossible = 0.85 }),
+        Ally = table.freeze({ Every = 180, PerMatch = 2, Impossible = 1 }),
+        Smart = table.freeze({ TroopsOut = 0.4 }), PeaceCut = 30,
+        Hint = table.freeze({ Every = 180, Troops = 0.6 }) }),
     Debug =table.freeze({ Speeds = table.freeze({ 1, 2, 4 }), GoldFill = 10000000 }),
     -- PF045 Oil Rigs (work/oilrigs/SPEC.md; SIM ONLY, OpenFrontOilRigs): ships OFF (Enabled=false: no live match inits it;
     -- balance harnesses pass options.oilRigs). Numbers are the spec's draft, under test (BALANCE-TEST-RULES 21-22).

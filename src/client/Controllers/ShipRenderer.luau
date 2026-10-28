@@ -9,6 +9,7 @@ local WeaponsRenderer=require(script.Parent.WeaponsRenderer)
 local GraphicsMath=require(script.Parent.GraphicsRenderMath)
 local GraphicsSettings=require(game:GetService("ReplicatedStorage").Shared.OpenFrontGraphicsSettings)
 local SpriteFx=require(script.Parent.SpriteFxRenderer)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local Vfx=require(game:GetService("ReplicatedStorage").Shared.PixelFrontVfxPolicy)
 local Renderer={}
 Renderer.__index=Renderer
@@ -379,7 +380,8 @@ function Renderer:update(state: any,colors: any,palettes: any)
 end
 function Renderer:draw(zoom: number,viewport: Frame)
     if not self.state then return end
-    local offset=self.world.AbsolutePosition-viewport.AbsolutePosition;local size=viewport.AbsoluteSize;local now=os.clock()
+    local offset=if okGeo then Geo.offset(self.world,viewport) else self.world.AbsolutePosition-viewport.AbsolutePosition
+    local size=if okGeo then Geo.viewportSize(viewport) else viewport.AbsoluteSize;local now=os.clock()
     local function position(tile: number): Vector2 local z=tile-1;return Vector2.new((z%self.width+.5)*zoom,(math.floor(z/self.width)+.5)*zoom) end
     local function visible(p: Vector2,margin: number): boolean local s=offset+p;return s.X>=-margin and s.Y>=-margin and s.X<=size.X+margin and s.Y<=size.Y+margin end
     local effectFrame=if Vfx.enabled(self.graphics.vfx,"warship") and self.effects and (if self.effects.hasAny then self.effects:hasAny("warship") else self.effects:has("warship")) then math.floor(now*15) else 0

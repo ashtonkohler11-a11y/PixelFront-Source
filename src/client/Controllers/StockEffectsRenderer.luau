@@ -7,6 +7,7 @@ local SpriteFx=require(script.Parent.SpriteFxRenderer)
 local Fx=require(script.Parent.StockFxMath)
 local Math=require(script.Parent.GraphicsRenderMath)
 local PixelPass=require(script.Parent.ShockwaveRenderer)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local Graphics=require(game:GetService("ReplicatedStorage").Shared.OpenFrontGraphicsSettings)
 local Performance=require(game:GetService("ReplicatedStorage").Shared.Performance)
 local Vfx=require(game:GetService("ReplicatedStorage").Shared.PixelFrontVfxPolicy)
@@ -85,7 +86,7 @@ function Renderer:drawTrails(zoom: number,viewport: Frame,offset: Vector2,time: 
     if not self.graphics.passEnabled.trail or not self.trail or next(self.trail.units)==nil then
         for _,chunk in self.chunks do if chunk.ui.Visible then chunk.ui.Visible=false end end;return
     end
-    local size=viewport.AbsoluteSize
+    local size=if okGeo then Geo.viewportSize(viewport) else viewport.AbsoluteSize
     local planCache=self.trailPlanCache
     if not planCache or self.trail.geometryVersion==nil or planCache.trail~=self.trail or planCache.version~=self.trail.geometryVersion
         or planCache.zoom~=zoom or planCache.x~=offset.X or planCache.y~=offset.Y or planCache.width~=size.X or planCache.height~=size.Y then
@@ -146,7 +147,7 @@ function Renderer:drawTrails(zoom: number,viewport: Frame,offset: Vector2,time: 
     Performance.finish("trails.paint",paintStarted)
 end
 function Renderer:draw(zoom: number,viewport: Frame)
-    if not self.state then return end;local now=os.clock();local offset=self.world.AbsolutePosition-viewport.AbsolutePosition
+    if not self.state then return end;local now=os.clock();local offset=if okGeo then Geo.offset(self.world,viewport) else self.world.AbsolutePosition-viewport.AbsolutePosition
     self:drawTrails(zoom,viewport,offset,now-self.started)
     if self.spiral and Vfx.decorations(self.graphics,"Atom Bomb")then self.spiral:draw(zoom,viewport,self.graphics,self.altView)end
     for _,r in self.ringImages do r:clear()end

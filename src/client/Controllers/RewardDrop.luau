@@ -90,11 +90,12 @@ function Drop:show(i: number)
         local okArt,Art=pcall(require,script.Parent.CosmeticArt)
         if art then art.Image="";art.ImageRectSize=Vector2.zero;if okArt then pcall((Art :: any).bind,art,item.itemId) end end
     else
-        name="+"..Drop.grouped(item.amount).." Cobalt";typeText="Cobalt"
+        name="+"..Drop.grouped(item.amount).." Cobalt";typeText="" -- the name already says Cobalt (MM: no "Cobalt" twice)
         if art then art.Image=GEM;art.ImageRectSize=Vector2.zero;art.ImageRectOffset=Vector2.zero end
     end
     local function set(n: string,text: string?,c: Color3?) local l=part(self,n);if l then if text then l.Text=text end;if c then l.TextColor3=c end end end
     set("Kind",item.label,color);set("Name",name);set("Type",typeText)
+    local typeLine=part(self,"Type");if typeLine and typeLine:IsA("GuiObject") then typeLine.Visible=typeText~="" end
     local count=part(self,"Count");if count then count.Visible=#self.queue>1;local l=count:FindFirstChild("Label");if l then l.Text=i.." of "..#self.queue end end
     for _,n in {"CardRim","RingStroke"} do local s=part(self,n);if s and s:IsA("UIStroke") then s.Color=color end end
     local glow=part(self,"Glow");if glow then glow.ImageColor3=color end

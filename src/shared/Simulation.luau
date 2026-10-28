@@ -18,6 +18,7 @@ local Territory = require(script.Parent.OpenFrontTerritory)
 local Roster = require(script.Parent.OpenFrontRoster)
 local Balance = require(script.Parent.OpenFrontMatchBalance)
 local NationAI = require(script.Parent.OpenFrontNationAI)
+local Dealer = require(script.Parent.OpenFrontDealer)
 local Economy = require(script.Parent.OpenFrontEconomy)
 local NationPortAI = require(script.Parent.OpenFrontNationPortAI)
 local Naval = require(script.Parent.OpenFrontNaval)
@@ -85,7 +86,7 @@ export type State = {
     diplomacyEvents: {any}, nextDiplomacyEventId: number, nextAllianceId: number,
     playerExecutionRemoved: {[number]: boolean}, quickChat: any,
     gameConfig: any?, gameId: string?, teams: {string}?, winnerTeam: string?, victory: any?, doomsday: any?, humanSpawnRandom: any?, playerInitTicks: {[number]: number},
-    matchBalance: boolean?, incomeLandCount: number?, recordTutorialAction: ((number,string)->any)?, tutorialStep: ((any)->())?, tutorialWinHeld: ((any,number)->boolean)?,
+    matchBalance: boolean?, incomeLandCount: number?, recordTutorialAction: ((number,string)->any)?, tutorialStep: ((any)->())?, tutorialTribeTile: (()->())?, tutorialWinHeld: ((any,number)->boolean)?,
     isFriendly: any?, isOnSameTeam: any?, nukeDiplomacy: any?, mirvDiplomacy: any?, railApi: any?,
 }
 local Simulation = {}
@@ -139,6 +140,8 @@ local function conquer(state: State, id: number, owner: number)
     if previous == owner then return end
     -- PF044 Barracks (PremiumItems.conquered): only while one stands, before the counts change
     if previous > 0 and owner > 0 and state.premium and state.premium.conquerActive then state.premium.conquered(state, previous, owner, id) end
+    -- first-match step 3: tribe land the player takes (TutorialProgress; set only while that step can still count)
+    if owner == 1 and previous > 0 and state.tutorialTribeTile and state.players[previous].playerType == "Bot" then state.tutorialTribeTile() end
     if previous > 0 then
         Collections.remove(state.territories[previous], id)
         Collections.remove(state.borders[previous], id)
@@ -515,8 +518,22 @@ function Simulation.mercyTile(state: any, owner: number, tile: number): boolean
     end
     return false
 end
+-- Early-wipe fix: a new player (state.newPlayerGrace[owner], set by the server for a player's first matches, never Ranked)
+-- is off-limits to nations for Config.Combat.NewPlayerGrace.Seconds after they spawn (playerInitTicks; else the start).
+-- A number instead of true is that player's own window in seconds (the first match: FirstMatchSeconds). The tutorial
+-- also holds nations off until its "Attack a nation" step (state.tutorialHoldsNations, TutorialProgress.attach), so a
+-- slow or idle first-match player is never wiped by a nation mid-lesson.
+function Simulation.newPlayerGraced(state: any, other: number): boolean
+    local grace = state.newPlayerGrace
+    if not grace or not grace[other] then return false end
+    if other == 1 and state.tutorialHoldsNations and state.tutorialHoldsNations() then return true end
+    local from = (state.playerInitTicks and state.playerInitTicks[other]) or state.startTick or 0
+    local seconds = if type(grace[other]) == "number" then grace[other] else Config.Combat.NewPlayerGrace.Seconds
+    return state.ticks - from < seconds / Config.Match.StepSeconds
+end
 function Simulation.mercyShield(state: any, owner: number, other: number): boolean
     if state.revive and owner ~= other and Simulation.reviveShielded(state, other) then return true end -- PF044 Revive shield
+    if state.newPlayerGrace and state.players[owner] and state.players[owner].playerType == "Nation" and Simulation.newPlayerGraced(state, other) then return true end
     -- PF044 Play Solo modes: with NationPeace a nation holds off a human of any size for the whole window (SoloDifficulty)
     return mercyActor(state, owner) and state.players[other] ~= nil and state.players[other].playerType == "Human"
         and mercyCenters(state) ~= nil and (state.counts[other] < GameConfig.forState(state).Mercy.ShieldTiles
@@ -1085,7 +1102,7 @@ end
 -- Tutorial maps (Availability.TutorialMaps, Honshu): the human starts on the mainland, the largest connected landmass
 -- (4-neighbour, as the simulation's borders), so step 3's tribe is always reachable on foot. Computed once per map.
 -- Honshu is one landmass, so the gate passes every land tile there (kept for any future tutorial map with islands).
-Simulation.TUTORIAL_SPAWN_HINT = "Pick your start in Japan"
+Simulation.TUTORIAL_SPAWN_HINT = "Pick your start on the mainland" -- (no tutorial-only map since 2026-10-27; Honshu deleted)
 Simulation._mainland = setmetatable({}, {__mode = "k"}) :: any
 function Simulation.tutorialMap(state: any): boolean
     local config = state and state.gameConfig
@@ -1177,14 +1194,43 @@ function Simulation.choosingStatus(state: State, present: { number }?): any
     return { deadlineTick = state.choosingDeadline, present = #humans, picked = picked, allPicked = #humans > 0 and picked == #humans,
         seconds = GameConfig.forState(state).Match.SpawnPhaseSeconds } -- the phase's full length (the ring's 100%)
 end
--- A human who hasn't picked starts at a random spot (spawnBot's search; the tutorial's mainland gate included): at the
--- spawn-phase deadline, or a late loader once the match is Playing.
+-- Ashton 2026-10-27 ("if you dont place places u in a good spot"): the open, non-border tile (spawnAllowed) farthest from
+-- every other spawn whose spawn area is mostly free, from deterministic samples (spawnHint's tests); nil when none qualifies.
+function Simulation.goodSpawn(state: State, owner: number): number?
+    if not state.map then return nil end
+    local width, height = state.map.width, state.map.height
+    local others = {}
+    for other, tile in state.spawnTiles do if other ~= owner then table.insert(others, tile) end end
+    for _, spawn in state.spawnPhasePending do if spawn.owner ~= owner then table.insert(others, spawn.tile) end end
+    local random = Random.new(Random.hash("goodSpawn:" .. tostring(owner) .. ":" .. tostring(state.gameId or state.seed)))
+    local full = math.pi * GameConfig.forState(state).Match.SpawnRadius ^ 2
+    local best, bestScore = nil, -math.huge
+    for _ = 1, 300 do
+        local x, y = Random.int(random, 0, width - 1), Random.int(random, 0, height - 1)
+        local id = y * width + x + 1
+        if not validId(state, id) or not passable(state, id) or state.owners[id] ~= 0 or isBorder(state, id) or not Simulation.spawnAllowed(state, id) then continue end
+        local near = math.huge
+        for _, tile in others do near = math.min(near, math.abs(x - (tile - 1) % width) + math.abs(y - math.floor((tile - 1) / width))) end
+        local score = math.min(near, 200)
+        if score <= bestScore then continue end
+        local area = Simulation.spawnArea(state, id, false)
+        if area and #area >= full * 0.6 then best, bestScore = id, score end
+    end
+    return best
+end
+-- A human who hasn't picked starts on a good spot (goodSpawn), else a random one (spawnBot's search; the tutorial's mainland
+-- gate included): at the spawn-phase deadline, or a late loader once the match is Playing.
 function Simulation.placeRandom(state: State, owner: number): boolean
     if not ownerValid(state, owner) or state.players[owner].playerType ~= "Human" or state.spawnTiles[owner] then return false end
     if state.phase ~= "Choosing" and state.phase ~= "Playing" then return false end
     for _, spawn in state.spawnPhasePending do applyNationSpawn(state, spawn.owner, spawn.tile) end
     state.spawnPhasePending = {}
-    if not spawnBot(state, owner) or not state.spawnTiles[owner] then return false end
+    local good = not (state.gameConfig and state.gameConfig.randomSpawn == true) and Simulation.goodSpawn(state, owner) or nil
+    local area = good and Simulation.spawnArea(state, good, false)
+    if good and area and #area > 0 then
+        for _, tile in area do conquer(state, tile, owner) end
+        state.spawnTiles[owner] = good
+    elseif not spawnBot(state, owner) or not state.spawnTiles[owner] then return false end
     state.autoPlaced = state.autoPlaced or {}; (state.autoPlaced :: any)[owner] = true -- the tutorial report's "Auto-placed"
     recordSpawn(state, owner)
     return true
@@ -1320,6 +1366,8 @@ local function launch(state: State, owner: number, targetOwner: number, amount: 
         id = state.nextAttackId, owner = owner, targetOwner = targetOwner, budget = paid,
         retreating = false, createdTick = state.ticks, active = true, random = Random.new(123), heap = Collections.heap(), border = {}, borderOrder=Collections.set(),borderSize = 0,
         sourceTile = sourceTile, forgiven = if forgive then true else nil,
+        -- stats v3 (observer; SkillFacts): the share of the sender's troops this send took (nil for a landing)
+        sendShare = if removeTroops ~= false then paid / math.max(1, state.troops[owner] + paid) else nil,
     }
     state.nextAttackId += 1
     if sourceTile then addNeighbors(state, attack, sourceTile) else refresh(state, attack) end
@@ -1332,11 +1380,16 @@ local function launch(state: State, owner: number, targetOwner: number, amount: 
     end
     for _, outgoing in state.attacks do
         if sourceTile == nil and outgoing.active and outgoing.owner == owner and outgoing.targetOwner == targetOwner then
-            attack.budget += outgoing.budget outgoing.active = false
+            attack.budget += outgoing.budget outgoing.active = false outgoing.merged = true
         end
     end
     pruneAttacks(state)
     if targetOwner>0 and not forgive then Diplomacy.updateRelation(state,targetOwner,owner,-60) end
+    -- Early-wipe fix (PF - 1's alert): the first attack ever launched at a human this match, once: {tick, by (owner)}
+    if targetOwner>0 and state.players[targetOwner].playerType=="Human" then
+        state.firstAttacked=state.firstAttacked or {}
+        if not state.firstAttacked[targetOwner] then state.firstAttacked[targetOwner]={tick=state.ticks,by=owner} end
+    end
     table.insert(state.attacks, attack)
     table.insert(state.executions, { kind = "Attack", attack = attack })
     return true
@@ -1380,7 +1433,11 @@ function Simulation.boat(state: State, owner: number, id: number, ratio: number?
     if amount < 1 then return false, "Not enough troops." end
     table.insert(state.pendingExecutions, { kind = "TransportShip", owner = owner, tileId = id, amount = amount })
     if state.revive and state.owners[id] > 0 then Simulation.reviveAttacked(state, owner, state.owners[id]) end -- PF044
-    if state.recordTutorialAction and state.owners[id] > 0 and state.players[state.owners[id]].playerType == "Nation" then state.recordTutorialAction(owner, "attackNation") end -- first-match step 4 by sea
+    -- first-match step 4 by sea: that landing is forgiven too (OpenFrontNaval passes forgive on to the landing's attack)
+    if state.recordTutorialAction and state.owners[id] > 0 and state.players[state.owners[id]].playerType == "Nation"
+        and state.recordTutorialAction(owner, "attackNation") == true then
+        state.pendingExecutions[#state.pendingExecutions].forgive = true
+    end
     return true, "Transport ship ordered.", reserve
 end
 function Simulation.boatRetreat(state: State, owner: number, unitId: number): (boolean, string)
@@ -1436,8 +1493,11 @@ local function conquerPlayer(state: State, captor: number, victim: number)
     Economy.conquerPlayer(state, captor, victim)
     recordDefeat(state, captor, victim)
 end
-local function finishDefender(state: State, owner: number, defender: number)
+local function finishDefender(state: State, owner: number, defender: number, slowed: boolean?)
     if state.counts[defender] >= GameConfig.forState(state).Combat.DefeatedTerritory then return end
+    -- Early-wipe fix: a small human under a slowed attack (Config.Combat.SmallTarget) loses its land tile by tile instead
+    -- of OpenFront's instant defeat under DefeatedTerritory, so the 52-tile spawn still gets its seconds to answer
+    if slowed and state.counts[defender] > 0 then return end
     Economy.conquerPlayer(state, owner, defender)
     recordDefeat(state, owner, defender)
     local scratch = {}
@@ -1470,8 +1530,22 @@ local function advance(state: State, attack: Campaign)
     local troopCount = attack.budget
     local borderSize = attack.borderSize + Random.int(attack.random, 0, 5)
     local tickBudget = 1
+    -- Early-wipe fix (Config.Combat.SmallTarget): against a small human the attack banks tiles per tick at a capped rate
+    -- (fixed at its first tick from the defender's land then) and takes at most what it has banked; it otherwise advances
+    -- exactly as the source attack (same order, costs and losses), only slower. Never on wilderness, tribes or nations.
+    local defenderNow = attack.targetOwner
+    if attack.smallRate == nil then
+        local small = Config.Combat.SmallTarget
+        attack.smallRate = false
+        if defenderNow > 0 and state.players[defenderNow].playerType == "Human" and (state.counts[defenderNow] or 0) <= small.MaxTiles then
+            attack.smallRate = math.max(small.MinTilesPerSecond, state.counts[defenderNow] / small.ReactSeconds) * Config.Match.StepSeconds
+            attack.smallBank = 0
+        end
+    end
+    if attack.smallRate then attack.smallBank = math.min(attack.smallBank + attack.smallRate, math.max(1, attack.smallRate)) end
     while tickBudget > 0 do
         if troopCount < 1 then attack.active = false return end
+        if attack.smallRate and attack.smallBank < 1 then break end
         if #attack.heap.tiles == 0 then refresh(state, attack) retreat(state, attack, 0) return end
         local tile = Collections.dequeue(attack.heap)
         if attack.border[tile] then
@@ -1492,7 +1566,9 @@ local function advance(state: State, attack: Campaign)
         attack.budget = math.max(0, troopCount)
         if defender > 0 then state.troops[defender] -= math.min(state.troops[defender], math.floor(defenderLoss)) end
         conquer(state, tile, attack.owner)
-        if defender > 0 then finishDefender(state, attack.owner, defender) end
+        attack.taken = (attack.taken or 0) + 1 -- stats v3 (observer; SkillFacts): tiles this attack took
+        if attack.smallRate then attack.smallBank -= 1 end
+        if defender > 0 then finishDefender(state, attack.owner, defender, attack.smallRate ~= false) end
     end
 end
 
@@ -1905,6 +1981,7 @@ function Simulation.step(state: State, dt: number, cooperate: (() -> ())?)
                 if cooperate then cooperate() end
             end
         end
+        if state.dealer then Dealer.tick(state, nationApi) end -- stats v3 dealer (Solo cohort A, Config.Dealer.Enabled)
         -- Singleplayer GameRunner installs WinCheck before spawned player
         -- executions. The tribe already exists when the human picks a spawn.
         checkVictory(state)
@@ -1934,8 +2011,16 @@ function Simulation.step(state: State, dt: number, cooperate: (() -> ())?)
                 if (state.ticks - state.lastClusterCalc[owner] > 20 or state.counts[owner] < 100)
                     and state.lastTileChange[owner] >= state.lastClusterCalc[owner] then
                     state.lastClusterCalc[owner] = state.ticks
-                    -- PF044: a revived player's pocket isn't annexed by encirclement while its shield lasts
-                    if not (state.revive and Simulation.reviveShielded(state, owner)) then Territory.update(state, owner, conquer, conquerPlayer) end
+                    -- PF044: a revived player's pocket isn't annexed by encirclement while its shield lasts. Early-wipe fix: nor
+                    -- is a small human's (Config.Combat.SmallTarget.MaxTiles): enclosed, it still falls only tile by tile to a
+                    -- (slowed) attack, never all at once (its clusters and bounds still update: only the annex is skipped)
+                    local smallHuman = state.players[owner].playerType == "Human" and state.counts[owner] <= Config.Combat.SmallTarget.MaxTiles
+                    -- PF044 Airdrop: nor is a fresh drop's pocket while its landing attack runs (PremiumItems.dropSafe)
+                    local dropSafe = state.premium ~= nil and state.premium.dropSafe ~= nil and state.premium.dropSafe(state, owner)
+                    if not (state.revive and Simulation.reviveShielded(state, owner)) then
+                        if smallHuman or dropSafe then Territory.update(state, owner, function() end, nil)
+                        else Territory.update(state, owner, conquer, conquerPlayer) end
+                    end
                 end
             end
             TribeAI.tick(state,owner,nationApi)

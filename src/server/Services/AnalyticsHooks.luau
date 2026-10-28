@@ -62,4 +62,47 @@ function Analytics.firstMatches(userId: number, total: number, logger: any?)
         end)
     end)
 end
+-- Stats v3 (STATS-SYSTEM-DESIGN §v3.9 step 4; PlayerProfileService calls these after each fold). Custom events (value +
+-- 3 fields): SoloBand, EarlyQuit, NextDifficulty, Dealt, SessionEnd, RobuxFunnel; and the FirstSession funnel
+-- (1 Joined · 2 First match · 3 Alive 3 min · 4 Second match · 5 Played 15 min, one funnel session per user).
+Analytics.FIRST_SESSION_FUNNEL = "FirstSession"
+local function custom(player: Player, name: string, value: number, a: string, b: string, c: string)
+    pcall(function()
+        AnalyticsService:LogCustomEvent(player, name, value, {
+            [Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = string.sub(a, 1, 50),
+            [Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = string.sub(b, 1, 50),
+            [Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = string.sub(c, 1, 50)})
+    end)
+end
+local function firstSession(player: Player, step: number, name: string)
+    pcall(function() AnalyticsService:LogFunnelStepEvent(player, Analytics.FIRST_SESSION_FUNNEL, "u" .. tostring(player.UserId), step, name) end)
+end
+-- s = PlayerProfile.applyMatch's summary, record = the record after
+function Analytics.stats(userId: number, s: any, record: any)
+    task.spawn(function()
+        local player = Players:GetPlayerByUserId(userId)
+        if not player then return end
+        local cohort = "Cohort " .. tostring(record.co)
+        if s.band and s.diff then custom(player, "SoloBand", math.floor(record.sk.r), s.band, s.diff, cohort) end
+        if s.res == "X" then custom(player, "EarlyQuit", math.floor(tonumber(s.alive) or 0), s.mode, tostring(s.quit), tostring(s.last)) end
+        if s.offered then custom(player, "NextDifficulty", 1, "seen", tostring(s.diff), cohort) end
+        if s.next then custom(player, "NextDifficulty", 1, if s.res == "W" then "won" else "tapped", tostring(s.diff), cohort) end
+        for lever, n in s.dealt or {} do custom(player, "Dealt", n, lever, tostring(s.bandStart), tostring(s.diff)) end
+        local total = record.c.matches
+        if total == 1 then
+            firstSession(player, 1, "Joined"); firstSession(player, 2, "First match")
+            if (tonumber(s.alive) or 0) >= 180 then firstSession(player, 3, "Alive 3 min") end
+        elseif total == 2 then firstSession(player, 4, "Second match") end
+    end)
+end
+-- out = PlayerProfile.applySession's result (called off the gameplay thread, after the write)
+function Analytics.session(player: Player, out: any, record: any, matches: number)
+    local bucket = if matches <= 0 then "0 matches" elseif matches == 1 then "1 match" elseif matches <= 3 then "2-3 matches" else "4+ matches"
+    custom(player, "SessionEnd", tonumber(out.minutes) or 0, bucket, if out.newPlayer then "new" else "returning", "Cohort " .. tostring(record.co))
+    if out.newPlayer then firstSession(player, 1, "Joined") end
+    if out.played15 then firstSession(player, 5, "Played 15 min") end
+end
+function Analytics.robux(player: Player, sku: string, placement: string, stage: string)
+    task.spawn(function() custom(player, "RobuxFunnel", 1, sku, placement, stage) end)
+end
 return table.freeze(Analytics)

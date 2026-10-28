@@ -94,14 +94,17 @@ Catalog.premiumPacks = {{id="pack_aurora", name="Aurora Pack", category="Premium
     items={"vfx_aurora","flag_aurora","crown_aurora","banner_aurora","frame_aurora","buildings_aurora","skin_aurora"},
     description="Aurora effect, flag, crown, profile banner, frame, original-building overlay and territory skin. Includes 10,000 Cobalt."},
     -- Starter Pass 2004933335 verified 2026-10-05 ("Starter Pack", 48 R$, for sale, same group as Aurora).
+    -- 2026-10-28 (Ashton via MM): renamed "Forge Pack": "Starter Pack" is the Armory's Bank + Artillery pack now. The id stays
+    -- (owners, receipts); the Game Pass's own name on Roblox is renamed by Ashton (RELEASE-CHECKLIST).
     -- targetRobux is setup guidance only; the client shows the live Marketplace price.
-    {id="pack_starter", name="Starter Pack", category="PremiumPack", passId=2004933335, targetRobux=49, amount=3000, art="forge-starter-pack",
+    {id="pack_starter", name="Forge Pack", category="PremiumPack", passId=2004933335, targetRobux=49, amount=3000, art="forge-starter-pack",
         items={"skin_forge","flag_forge","frame_forge","buildings_forge"},
         description="Forge territory skin, flag, profile frame and original-building overlay. Includes 3,000 Cobalt once."}}
 Catalog.premiumById = {}; for _,pack in Catalog.premiumPacks do Catalog.premiumById[pack.id]=pack end
 -- PIVOT Glacier: packs that are earned, not bought (no pass): the daily grants every item of the pack on its day; the
 -- shop shows the pack card and its key opens the Daily reward. Its items are packOnly.
-Catalog.earnedPacks = {{id="pack_glacier", name="Glacier Pack", category="EarnedPack", daily=4,
+-- UI lock-in (PF - 4, R21): shown as "Glacier set" everywhere (the Daily's Day 4 tile, the Shop card, the items' pack line)
+Catalog.earnedPacks = {{id="pack_glacier", name="Glacier set", category="EarnedPack", daily=4,
     items={"skin_glacier","buildings_glacier","vfx_frostbloom","nameplate_icicle","flag_snowcrest"},
     description="Glacier skin, buildings, Frostbloom, the Icicle nameplate and the Snowcrest flag. Day 4 of the Daily reward."}}
 Catalog.earnedById = {}; for _,pack in Catalog.earnedPacks do Catalog.earnedById[pack.id]=pack end
@@ -113,10 +116,6 @@ Catalog.passes = {
     {id="pass_vip", key="VIP", name="VIP", category="Pass", passId=2013014438,
         items={"flag_gilded", "crown_gilded", "frame_gilded", "banner_gilded", "nameplate_gold"},
         description="Gold status. +10% Cobalt, the gold VIP badge, the Gilded set, 2× daily rewards and gold lobbies."},
-    {id="pass_custom_flag", key="CustomFlag", name="Custom Flag", category="Pass", passId=2013710457, items={},
-        description="Use your own image as your flag."},
-    {id="pass_lobby_host_plus", key="LobbyHostPlus", name="Lobby Host+", category="Pass", passId=2013260468, items={},
-        description="Bigger rooms, teams, lock and kick."},
     -- PIVOT (Ashton 2026-10-24: buy 2x Cobalt "right then and there" on the end card): every match pays x2 (MatchCobalt,
     -- Config.MatchCobalt.DoublePass names this id). passId = Config.MatchCobalt.PassId, 0 until Ashton makes the Game Pass: the end card's chip shows,
     -- its tap does nothing (truthful). robux is the display price until GetProductInfo answers.
@@ -131,7 +130,15 @@ Catalog.retiredPasses = {
     {id="pass_animated_nameplate", key="AnimatedNameplate", name="Animated Nameplate", category="Pass", passId=2012900464, retired=true,
         items={"nameplate_neon", "nameplate_ember", "nameplate_prism", "nameplate_frost"},
         description="Your map name, animated: Neon, Ember, Prism or Frost."},
+    -- Ashton 2026-10-27 ("remove lobby host+ and just make it free, remove custom flag, meaning only pass is vip"): off sale and
+    -- out of every shop. A Custom Flag owner keeps their uploaded flag (CosmeticProfiles' snapshot still lists retired passes,
+    -- so passes.CustomFlag stays true for them); Host+ is free for every host (LobbyContract.HostPlus.free).
+    {id="pass_custom_flag", key="CustomFlag", name="Custom Flag", category="Pass", passId=2013710457, items={}, retired=true,
+        description="Use your own image as your flag."},
+    {id="pass_lobby_host_plus", key="LobbyHostPlus", name="Lobby Host+", category="Pass", passId=2013260468, items={}, retired=true,
+        description="Bigger rooms, teams, lock and kick."},
 }
+Catalog.retiredPassById = {}; for _,pass in Catalog.retiredPasses do Catalog.retiredPassById[pass.id]=pass end
 -- VIP perks (G5a): V1 +10% Cobalt on purchases and reward grants (never admin grants) and V5 2× daily rewards (was 50
 -- Cobalt once per UTC day; see Catalog.vip below). V2 +15% XP went with Levels (Ashton 2026-10-26: "Just drop it").
 -- PF021 tutorial reward (Ashton-approved B1-B3, MM): Cobalt once per account for winning the tutorial.

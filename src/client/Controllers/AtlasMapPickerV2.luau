@@ -83,6 +83,7 @@ function V2.new(root: Frame,context: any): any
     local hit=back:FindFirstChild("PFHit");if hit then listen(hit.Activated,function() self:close(nil) end) end
     local Line=require(script.Parent.TopbarLine)
     Line.keepRight(layer.Top,self.connections);Line.clearBelow(canvas,self.connections)
+    if Line.scaleTitle then Line.scaleTitle(layer.Top:FindFirstChild("Title"),self.connections) end -- R1: the title scales like desk
     listen(self.input:GetPropertyChangedSignal("Text"),function() self.query=self.input.Text;self:render() end)
     listen(self.bar.All.Activated,function() self.tab="All";self:render() end)
     listen(self.bar.Favorites.Activated,function() self.tab="Favorites";self:render() end)

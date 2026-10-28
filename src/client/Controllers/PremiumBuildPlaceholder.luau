@@ -22,6 +22,10 @@ local Sprites=require(Shared:WaitForChild("PremiumSprites"))
 local Feed=require(script.Parent.MatchPacketFeed)
 local Match=require(Shared:WaitForChild("Config")).Arsenal.Match
 local okRenderer,BuildingRenderer=pcall(require,script.Parent.BuildingRenderer)
+-- PF - 4 building animations (Ashton 2026-10-27): a premium site rises in gold, paced by its construction, then lands
+local okBuildAnim,BuildAnim=pcall(require,script.Parent.BuildAnim)
+local okBuildAnimMath,BuildAnimMath=pcall(require,script.Parent.BuildAnimMath)
+local ANIM=okBuildAnim and okBuildAnimMath
 local M={}
 -- the no-sprite fallback squares (premium reshuffle 2026-10-26: Longshot, Insurance and Bounty retired)
 local LETTER={bank="$",tax_office="%",trade_guild="S",engineering_yard="E",tesla_coil="T",artillery="A",warden="W",barracks="B",training_camp="C",stock_exchange="X"}
@@ -32,15 +36,15 @@ local COLOR={bank=Color3.fromRGB(245,197,66),tax_office=Color3.fromRGB(230,210,1
 local CARD,GAP,SIDE=0.0943396,0.00628931,0.00925926
 -- the hover card's one line per item (the Shop's Arsenal facts, short); the costs ladder from Config.Arsenal.Match
 local EFFECT={tesla_coil="Zaps the biggest enemy attack in range: −1.5% a second",artillery="Shells rivals in range: −1.5% troops every 10 s",
-    airdrop="Drops 15% of your troops on land behind their lines",blitz_bomb="2.3× an Atom's blast, flies 1.5× faster · 1 SAM hit stops it",
-    titan_bomb="1.6× a Hydrogen's blast · needs 2 SAM hits",bank="+2.5K gold a second · up to 2 · full output at 8:00",
+    airdrop="Drops 15% of your troops on land behind their lines",blitz_bomb="2.3× an Atom Bomb's blast, flies 1.5× faster · 1 SAM Launcher hit stops it",
+    titan_bomb="1.6× a Hydrogen Bomb's blast · needs 2 SAM Launcher hits",bank="+2.5K gold a second · up to 2 · full output at 8:00",
     tax_office="+200 gold a second per City level (up to 12) · full output at 8:00",trade_guild="+12% trade gold · safe trade ships near your Ports · full output at 8:00",
     engineering_yard="Every build of yours finishes 2× faster",
     -- premium reshuffle (2026-10-25; PREMIUM-RESHUFFLE-SPEC.md)
     warden="A heavy shell on every attack on you inside its 66-tile ring: −6% every 20 s",
     barracks="Captures speed up your troop growth, up to +15%; it fades within a minute",
-    training_camp="Then Train from the grid: gold into troops, 45 s apart",
-    stock_exchange="Then Invest from the grid: 1.6× back in 3 minutes; a raider takes the stake"}
+    training_camp="Then Train from its card: gold into troops, 45 s apart",
+    stock_exchange="Then Invest from its card: 1.6× back in 3 minutes; a raider takes the stake"}
 -- the slot / button order: Warfare, then Industry in its shelf order (the Armory rail's); an action sits right after its building
 local ORDER={"tesla_coil","training_camp","artillery","barracks","blitz_bomb","airdrop","warden","titan_bomb",
     "engineering_yard","bank","tax_office","stock_exchange","trade_guild"}
@@ -72,12 +76,18 @@ function M.start()
     -- Cards.ShopCell the last cell); the wing holds only Cards.PremiumKey (opens the grid) or, owning nothing, Cards.ShopTile.
     -- Game.PFArsenalShade closes the grid on a tap outside. A v3 place (Slot in the wing) keeps the row.
     local grid=controls and controls:FindFirstChild("PFArsenalGrid") :: any
-    local slotTemplate=(grid and grid.Cards:FindFirstChild("Slot")) or (wing and wing:FindFirstChild("Cards") and wing.Cards:FindFirstChild("Slot"))
-    if not slotTemplate then wing=nil;grid=nil end
+    -- PF - 3 variant C (Ashton 2026-10-27: "C is perfect just make sure its a scroll frame and showing like 3 at a time"):
+    -- Game.PFPremiumRail (author-pf3-premium-rail) replaces the wing + grid: every premium item as a hero card in its List
+    -- (owned first, then locked; the last row opens the Armory), the Invest card beside it. With the rail, "wing" is the rail.
+    local rail=gameUI:FindFirstChild("PFPremiumRail") :: any
+    if rail then wing=rail;grid=nil end
+    local slotTemplate=(rail and rail.Templates:FindFirstChild("Card")) or (grid and grid.Cards:FindFirstChild("Slot")) or (wing and wing:FindFirstChild("Cards") and wing.Cards:FindFirstChild("Slot"))
+    if not slotTemplate then wing=nil;grid=nil;rail=nil end
     local premiumKey=grid and wing.Cards:FindFirstChild("PremiumKey");local shopTile=grid and wing.Cards:FindFirstChild("ShopTile")
     local shopCell=grid and grid.Cards:FindFirstChild("ShopCell");local shade=grid and gameUI:FindFirstChild("PFArsenalShade")
     local gridOpen=false
-    local investCard=grid and grid:FindFirstChild("PFInvestCard") :: any -- v6: the Stock Exchange's Invest card (paintInvest)
+    -- v6: the Stock Exchange's Invest card (paintInvest); with the rail it sits in rail.InvestHolder
+    local investCard=(if rail then rail:FindFirstChild("PFInvestCard",true) else grid and grid:FindFirstChild("PFInvestCard")) :: any
     local investOpen=false
     local function setGrid(open: boolean)
         if not grid then return end
@@ -88,14 +98,14 @@ function M.start()
     end
     -- the Shop (the tile with nothing owned, the grid's last cell): the in-match Shop over the live match, on Arsenal
     -- (MatchController's MatchPacketFeed.context.openArsenal: AtlasMenu's locked shop; Back returns to the match)
-    local function openShop()
-        setGrid(false)
+    local function openShop(item: string?)
+        setGrid(false);investOpen=false;if investCard then investCard.Visible=false end
         local open=Feed.context and Feed.context.openArsenal
-        if open then pcall(open) end
+        if open then pcall(open,item) end -- the rail's locked card opens the Armory on that item
     end
     if grid then
         if premiumKey then premiumKey.Activated:Connect(function() setGrid(not gridOpen) end) end
-        for _,k in {shopTile,shopCell} do if k then k.Activated:Connect(openShop) end end
+        for _,k in {shopTile,shopCell} do if k then k.Activated:Connect(function() openShop() end) end end
         if shade then shade.Activated:Connect(function() setGrid(false) end) end
     end
     local screen=Instance.new("ScreenGui");screen.Name="PF044ArsenalPlaceholder";screen.ResetOnSpawn=false;screen.DisplayOrder=50
@@ -121,6 +131,11 @@ function M.start()
     local buttons: {[string]: TextButton}={}
     local optionKind: {[string]: string}={}
     local markers: {[number]: Frame}={}
+    -- PF - 4: a site's whole build time = what was left when it was first seen (the packet has only the finish tick; an
+    -- Engineering Yard halves it), capped at the configured construction ticks
+    local buildTotal: {[number]: number}={}
+    local okArsenal,ArsenalConfig=pcall(function() return (require(Shared:WaitForChild("Config")) :: any).Arsenal.Match end)
+    local CONSTRUCTION=(okArsenal and ArsenalConfig and ArsenalConfig.ConstructionTicks) or 50
     local arm: (item: string)->()
     local act: (item: string)->() -- an action slot (Train / Invest): no placing (defined below)
     local paintSlots: (()->())?=nil -- the slots' live states (defined below, with the match timing)
@@ -147,8 +162,83 @@ function M.start()
         local t=TweenService:Create(gradient,TweenInfo.new(.9,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),{Offset=Vector2.new(1.2,0)})
         t.Completed:Once(function() band.Visible=false end);t:Play()
     end
+    -- ---------------------------------------------------------------- the rail (variant C): hero cards, owned then locked
+    local Rail=require(script.Parent.PremiumRail)
+    local okShowcase,Showcase=pcall(require,script.Parent.ArmoryShowcase)
+    local catalogIds={};for _,it in Arsenal.items do table.insert(catalogIds,it.id) end
+    local locks: {[string]: any}={} -- the locked items' cards
+    local allRow: any=nil
+    -- a card's face: the Armory hero's first frame (greyed when locked), the name, the rim
+    local function railLook(card: any,item: string,locked: boolean)
+        local hero=okShowcase and (Showcase :: any).items[item]
+        card.Art.Image=if hero then hero.sheet else ""
+        -- locked: the art shows at ~40% under the lock (UI audit build-out 2026-10-28: at 78/255 the cards read as black boxes)
+        card.Art.ImageColor3=if locked then Color3.fromRGB(118,120,128) else Color3.new(1,1,1)
+        -- the label is the child "Name" (card.Name is the card's own Name string): FindFirstChild
+        local label=card:FindFirstChild("Name")
+        if label then
+            label.Text=(Arsenal.byId[item] and Arsenal.byId[item].name) or item
+            label.TextColor3=if locked then Color3.fromRGB(201,207,219) else Color3.new(1,1,1)
+        end
+        card.Lock.Visible=locked;card.Icon.Visible=not locked
+        local rim=card:FindFirstChild("Rim")
+        if rim then rim.Color=if locked then Color3.fromRGB(47,55,71) else Color3.fromRGB(255,211,106);rim.Transparency=if locked then 0 else .45 end
+        -- UI audit build-out 2026-10-28 (UiMotion): a card you own breathes its gold rim softly (.45 -> .85, 2.4 s, inside the
+        -- card) while it shows; once per card
+        if rim and rim:IsA("UIStroke") and not locked and not card:GetAttribute("PFRimGlow") then
+            local ok,Motion=pcall(function() return require(script.Parent.UiMotion) end)
+            if ok and type(Motion)=="table" and type(Motion.glow)=="function" then card:SetAttribute("PFRimGlow",true);Motion.glow(rim,{lo=.45,hi=.85}) end
+        end
+    end
+    -- a locked item: tap opens the Armory on it; hover (desk) shows its tip
+    local function lockedCard(item: string): any
+        local card=locks[item];if card then return card end
+        card=slotTemplate:Clone();card.Name="Locked_"..item;card.Visible=true
+        card:SetAttribute("PFPremiumItem",item);card:SetAttribute("PFRailLocked",true)
+        railLook(card,item,true)
+        local it=Arsenal.byId[item]
+        card.Cost.Text=Rail.lockedChip(it and it.cobalt);card.Cost.TextColor3=Color3.fromRGB(223,232,255)
+        card.Cost.BackgroundColor3=Color3.fromRGB(18,28,58)
+        local chipRim=card.Cost:FindFirstChild("Rim");if chipRim then chipRim.Color=Color3.fromRGB(60,95,184) end
+        card.Activated:Connect(function() City.premiumTip(nil);openShop(item) end)
+        card.MouseEnter:Connect(function() City.premiumTip(card) end)
+        card.MouseLeave:Connect(function() City.premiumTip(nil) end)
+        card.Parent=rail.List;locks[item]=card
+        return card
+    end
+    -- every row's place in the List's canvas (pure scale), the head's count; packet nil = nothing owned
+    local function paintRail(packet: any?)
+        if not rail then return end
+        local owned={};for _,o in (packet and packet.options) or {} do owned[o.item]=true end
+        for id,card in locks do if owned[id] then card:Destroy();locks[id]=nil end end
+        if not allRow then
+            allRow=rail.Templates.All:Clone();allRow.Visible=true;allRow.Parent=rail.List
+            allRow.Activated:Connect(function() openShop() end)
+        end
+        local rows=Rail.rows(ORDER,owned,catalogIds)
+        local scale,spots=Rail.layout(rows,Rail.SPEC)
+        local n=0
+        for i,row in rows do
+            local node=if row.kind=="all" then allRow elseif row.kind=="owned" then buttons[row.id] else lockedCard(row.id)
+            if not node then continue end
+            if row.kind=="owned" then n+=1 end
+            local s=spots[i];node.Position=UDim2.fromScale(s.x,s.y);node.Size=UDim2.fromScale(s.w,s.h)
+        end
+        -- CanvasSize's Scale reads against the ScrollingFrame's parent (the rail): the List's own share, times the content
+        local ls=rail.List.Size
+        rail.List.CanvasSize=UDim2.new(ls.X.Scale,0,ls.Y.Scale*scale,0)
+        rail.Head.Count.Text=n.." / "..#catalogIds
+        local label=allRow:FindFirstChild("Label");if label then label.Text="All "..#catalogIds.." in the Armory ›" end
+    end
     local function draw()
         local packet=latest
+        if rail and not packet then -- the rail, owning nothing (no Premium packet): every item locked, while playing
+            local playing=gameUI.Visible and liveState~=nil and liveState.phase=="Playing" and not premiumOff
+            rail.Visible=playing;screen.Enabled=false;investOpen=false;if investCard then investCard.Visible=false end
+            if playing then paintRail(nil) end
+            for id,m in markers do m:Destroy();markers[id]=nil end
+            return
+        end
         if grid and not packet then -- v4: owning nothing (no Premium packet): just the Shop tile, while playing
             local playing=gameUI.Visible and liveState~=nil and liveState.phase=="Playing" and not premiumOff
             wing.Visible=playing;premiumKey.Visible=false;shopTile.Visible=true
@@ -156,9 +246,10 @@ function M.start()
             for id,m in markers do m:Destroy();markers[id]=nil end
             return
         end
-        local show=packet~=nil and gameUI.Visible and (#packet.options>0 or grid~=nil) and not premiumOff -- v4: the Shop tile shows with nothing owned
+        local show=packet~=nil and gameUI.Visible and (#packet.options>0 or grid~=nil or rail~=nil) and not premiumOff -- v4: the Shop tile shows with nothing owned
         screen.Enabled=show;bar.Visible=wing==nil -- with the wing the ScreenGui keeps only the aim note
         if wing then wing.Visible=show end
+        if rail and not show then investOpen=false;if investCard then investCard.Visible=false end end
         if grid and not show and gridOpen then setGrid(false) end
         catcher.Visible=show and (placing~=nil or os.clock()<holdCatcher)
         if not packet then for id,f in markers do f:Destroy();markers[id]=nil end;return end
@@ -176,6 +267,7 @@ function M.start()
                 local rect=Sprites.icons and Sprites.icons.rects[ICON_OF[item] or item]
                 if rect then slot.Icon.Image=Sprites.icons.image;slot.Icon.ImageRectOffset=Vector2.new(rect.x,rect.y);slot.Icon.ImageRectSize=Vector2.new(rect.w,rect.w) end
                 slot.Active=true;slot:SetAttribute("PFPremiumItem",item)
+                if rail then railLook(slot,item,false) end
                 -- the base slot's hover card on desk (the dock's BlueprintTooltip) + the shine; on touch the same card on a long
                 -- press (its release never arms)
                 local suppress,holding=0,0
@@ -198,7 +290,7 @@ function M.start()
                     holding=0
                     if slot:GetAttribute("PFLongPress") then slot:SetAttribute("PFLongPress",nil);City.premiumTip(nil);suppress=os.clock()+.3 end
                 end)
-                slot.Parent=if grid then grid.Cards else wing.Cards;b=slot;buttons[item]=slot
+                slot.Parent=if rail then rail.List elseif grid then grid.Cards else wing.Cards;b=slot;buttons[item]=slot
             end
             if not b then
                 b=Instance.new("TextButton");b.Name=option.item;b.Size=UDim2.fromOffset(150,32);b.Font=Enum.Font.GothamBold;b.TextSize=13
@@ -217,7 +309,10 @@ function M.start()
             end
         end
         for id,b in buttons do if not seen[id] then b:Destroy();buttons[id]=nil end end
-        if grid then -- v4: the key (owned items) or the Shop tile (nothing owned); the grid's header counts them
+        if rail then -- variant C: owned + locked cards in the List
+            if show then paintRail(packet) end
+            if paintSlots then paintSlots() end
+        elseif grid then -- v4: the key (owned items) or the Shop tile (nothing owned); the grid's header counts them
             local n=#entries
             premiumKey.Visible=n>0;shopTile.Visible=n==0
             local owned=#packet.options
@@ -280,8 +375,15 @@ function M.start()
                     local img=f:FindFirstChild(name) :: ImageLabel
                     if img.Image~=sheet.image then img.Image=sheet.image end
                     img.ImageRectOffset=Vector2.new(cell.x+(i-1)*cell.cell,cell.y);img.ImageRectSize=Vector2.new(cell.cell,cell.cell)
-                    img.ImageTransparency=if building_ then .5 else 0
+                    img.ImageTransparency=if building_ and not ANIM then .5 else 0
                     if name=="Mask" then img.ImageColor3=if typeof(owner)=="Color3" then owner else Color3.fromRGB(150,150,150) end
+                end
+                if ANIM then
+                    local total=buildTotal[building.id]
+                    if not total then total=math.clamp(building.built-packet.ticks,1,CONSTRUCTION);buildTotal[building.id]=total end
+                    local layers={};for _,name in Sprites.layers do local img=f:FindFirstChild(name);if img then table.insert(layers,img) end end
+                    (BuildAnim :: any).site(f,layers,(BuildAnimMath :: any).premiumProgress(building.built,packet.ticks,total),
+                        {premium=true,mine=building.owner==1,fresh=false,px=px,pop=f})
                 end
                 local pips=f:FindFirstChild("Pips")
                 if pips then for i=1,3 do (pips :: any)["Pip"..i].Visible=i<=(building.level or 0) end end
@@ -293,7 +395,7 @@ function M.start()
                 if letter then letter.Text=(LETTER[building.item] or "?")..(if (building.level or 0)>0 then string.rep("+",building.level) else "") end
             end
         end
-        for id,f in markers do if not live[id] then f:Destroy();markers[id]=nil end end
+        for id,f in markers do if not live[id] then f:Destroy();markers[id]=nil;buildTotal[id]=nil end end
     end
     -- ---------------------------------------------------------------- Phase 3: projectiles in flight + event FX
     -- projectiles {id, owner, item, from, to, launched, arrive, hits}: a straight line, pos = lerp(from, to, progress), drawn
@@ -399,7 +501,7 @@ function M.start()
     -- ---------------------------------------------------------------- the placement ghost (MM: as the base buildings')
     -- BuildingRenderer:drawGhost's look: the sprite at half transparency following the cursor, red where it can't go, the
     -- cost under it (a clone of the authored GhostCost), a range ring (a clone of IndustryGhostRange, the same ring textures):
-    -- Tesla 14 / Artillery 22 / Warden 66 at the cursor, Airdrop 100 round your nearest
+    -- Tesla 24 / Artillery 22 / Warden 66 at the cursor, Airdrop 100 round your nearest
     -- silo. The checks mirror PremiumItems.build / launch, so the reason is the server's: Max n / Not your land / Too close.
     local Icons=require(script.Parent.ReferenceIcons)
     local Nukes=require(Shared:WaitForChild("OpenFrontNukes"))
@@ -501,7 +603,7 @@ function M.start()
         -- the cost under it (as GhostCost: red when short, grey when it can't go)
         local o=nil;for _,v in packet.options do if v.item==item then o=v;break end end
         if ghostCost and kind=="build" and o and o.cost then
-            ghostCost.Text=short(o.cost);ghostCost.Position=UDim2.fromOffset(at.X,at.Y+25)
+            ghostCost.Text=short(o.cost);ghostCost.Position=UDim2.fromOffset(at.X,at.Y-25)
             ghostCost.TextColor3=if st.gold[1]<o.cost then Color3.new(1,.3,.3) elseif reason then Color3.new(.6,.6,.6) else Color3.new(1,1,1)
             ghostCost.Visible=true
         elseif ghostCost then ghostCost.Visible=false end
@@ -615,6 +717,16 @@ function M.start()
             if wasCooling[item] and st~="cooling" and isAction(o) then flash(s) end
             wasCooling[item]=st=="cooling"
             if not beat then s.Cost.TextColor3=City.priceColor(if st=="cooling" then "blocked" else st) end
+            -- the rail's action chips (the board): "Train +5.7K" / "Full" / "◷ 0:45"; "Invest" / "◷ 1:47" with a gold bar along the foot
+            if rail then
+                local left=if r then (r-nowTicks())*STEP else nil
+                local chip=if isAction(o) and not beat then Rail.actionChip(o.kind,st=="cooling",left,o.full,o.troops) else nil
+                if chip then s.Cost.Text=chip end
+                local running=o.kind=="invest" and type(o.active)=="table"
+                if running then s.Cost.TextColor3=Color3.fromRGB(255,211,106) end
+                local bar=s:FindFirstChild("Bar")
+                if bar then bar.Visible=running;if running and left then bar.Fill.Size=UDim2.fromScale(math.clamp(1-left/Match.stock_exchange.Seconds,0,1),1) end end
+            end
             s:SetAttribute("HudBlocked",st=="blocked");s:SetAttribute("Affordable",st~="short")
             s:SetAttribute("BlueprintSelected",placing==item);s:SetAttribute("HudSlotState",st)
             s.Icon.ImageTransparency=if st=="blocked" then .72 else 0
@@ -624,7 +736,8 @@ function M.start()
             if st=="cooling" and r then
                 local c=cooldowns[item];if not c or c.to~=r then c={from=math.min(latest.ticks,r-1),to=r};cooldowns[item]=c end
             else cooldowns[item]=nil end
-            local veil=s:FindFirstChild("PFCooldown");if veil then veil.Visible=st=="cooling" end
+            -- (the rail's running investment shows its bar, not the veil: the card stays lit)
+            local veil=s:FindFirstChild("PFCooldown");if veil then veil.Visible=st=="cooling" and not (rail and o.kind=="invest") end
         end
         paintInvest()
     end
@@ -638,16 +751,67 @@ function M.start()
             local left=math.max(0,c.to-now)
             if left<=0 then cooldowns[item]=nil;paintSlots();continue end
             veil.Size=UDim2.fromScale(1,math.clamp(left/math.max(1,c.to-c.from),0,1))
-            if not pressed[item] then s.Cost.Text=clock(left*STEP) end -- the timer sits where the price does
+            if not pressed[item] then s.Cost.Text=if rail then "◷ "..clock(left*STEP) else clock(left*STEP) end -- the timer sits where the price does
+            local bar=rail and s:FindFirstChild("Bar")
+            if bar and bar.Visible then bar.Fill.Size=UDim2.fromScale(math.clamp(1-left*STEP/Match.stock_exchange.Seconds,0,1),1) end
         end
         if investOpen then paintInvest() end
     end)
+    -- v2 (PF - 3, Ashton picked A "pick amount", author-pf3-invest-card): Ready = PUT IN (−/+, 25/50/75%/Max) · YOU GET BACK ·
+    -- "Invest 1.2M"; Running = INVESTED · the bar · "1.92M in 1:47" · "Locked until it pays". The pick is a share of the max
+    -- allowed now (PremiumRail.investAmount); the server clamps the amount to that max (PF - 2's UsePremium amount).
+    local investPick: number?=nil -- nil = Max
+    local investShown: boolean?=nil -- which state's shape the card has (true = running)
+    local function investShape(card: any,running: boolean)
+        if investShown==running then return end;investShown=running
+        local h=card:GetAttribute(if running then "PFRunH" else "PFReadyH");local hh=card:GetAttribute("PFHeadH");local w=card:GetAttribute("DW")
+        if type(h)~="number" or type(hh)~="number" or type(w)~="number" then return end
+        local shape=card:FindFirstChild("Shape");if shape then shape.AspectRatio=w/h end
+        card.Head.Size=UDim2.fromScale(1,hh/h)
+        for _,state in {card.Ready,card.Running} do state.Position=UDim2.fromScale(0,hh/h);state.Size=UDim2.fromScale(1,(h-hh)/h) end
+        card.Ready.Visible=not running;card.Running.Visible=running
+    end
+    local function paintInvest2(o: any)
+        local card=investCard
+        local rect=Sprites.icons and Sprites.icons.rects.stock_exchange
+        if rect then local icon=card.Head.Icon;icon.Image=Sprites.icons.image;icon.ImageRectOffset=Vector2.new(rect.x,rect.y);icon.ImageRectSize=Vector2.new(rect.w,rect.h) end
+        local inv=type(o.active)=="table" and o.active or nil
+        local left=if inv and type(inv.ends)=="number" then math.max(0,(inv.ends-nowTicks())*STEP) else nil
+        investShape(card,inv~=nil)
+        card.Head.State.Text=if left then clock(left).." LEFT" else "READY"
+        card.Head.State.TextColor3=if left then Color3.fromRGB(255,211,106) else Color3.fromRGB(141,151,166)
+        if inv then
+            local run=card.Running
+            run.Value.Text=if type(inv.stake)=="number" then short(inv.stake) else "—"
+            run.Track.Fill.Size=UDim2.fromScale(math.clamp(1-(left or 0)/Match.stock_exchange.Seconds,0,1),1)
+            run.Pays.Text=(if type(inv.payout)=="number" then short(inv.payout) else "—").." in "..clock(left or 0)
+            return
+        end
+        local ready=card.Ready
+        local max=if type(o.stake)=="number" then o.stake else 0
+        local amount=Rail.investAmount(max,investPick)
+        local back=Rail.investBack(amount,o.stake,o.payout,o.gain)
+        ready.Amount.Value.Text.Text=if amount>0 then short(amount) else "—"
+        ready.Back.Value.Text=if amount>0 then short(back) else "—"
+        ready.Back.Gain.Text=if amount>0 then "+"..short(back-amount) else ""
+        for name,share in Rail.PRESETS do
+            local chip=ready.Presets:FindFirstChild(name);if not chip then continue end
+            local on=math.abs((investPick or 1)-share)<1e-6
+            chip.BackgroundColor3=if on then Color3.fromRGB(29,43,74) else Color3.fromRGB(21,26,36)
+            local r=chip:FindFirstChild("Rim");if r then r.Color=if on then Color3.fromRGB(79,134,255) else Color3.fromRGB(43,50,64) end
+            chip.Label.TextColor3=if on then Color3.new(1,1,1) else Color3.fromRGB(195,203,216)
+        end
+        ready.Key.Label.Text=if amount>0 then "Invest "..short(amount) else "Nothing to invest yet"
+        ready.Key.Active=amount>0;ready.Key.BackgroundTransparency=if amount>0 then 0 else .55
+        ready.Fine.Text=if max>0 then "Up to "..short(max).." now (30 s of your income)" else "Earn some gold first"
+    end
     -- the Invest card (v6, PF - 5's take B): STAKE › BACK IN 3:00, one key; a running investment shows its clock instead
     paintInvest=function()
         if not investCard then return end
         local o=option("stock_exchange");if o and o.kind~="invest" then o=nil end
-        investCard.Visible=investOpen and gridOpen and o~=nil
+        investCard.Visible=investOpen and (gridOpen or (rail~=nil and rail.Visible)) and o~=nil
         if not investCard.Visible or not o then return end
+        if investCard:FindFirstChild("Ready") then paintInvest2(o);return end -- v2
         local rect=Sprites.icons and Sprites.icons.rects.stock_exchange
         if rect then investCard.Icon.Image=Sprites.icons.image;investCard.Icon.ImageRectOffset=Vector2.new(rect.x,rect.y);investCard.Icon.ImageRectSize=Vector2.new(rect.w,rect.h) end
         local inv=type(o.active)=="table" and o.active or nil
@@ -664,7 +828,21 @@ function M.start()
         key.Active=left==nil;key.AutoButtonColor=left==nil
         key.BackgroundTransparency=if left then .55 else 0
     end
-    if investCard then
+    if investCard and investCard:FindFirstChild("Ready") then -- v2: the picker's keys, and Invest with the picked amount
+        local ready=investCard.Ready
+        ready.Amount.Minus.Activated:Connect(function() investPick=Rail.stepPick(investPick,-1);paintInvest() end)
+        ready.Amount.Plus.Activated:Connect(function() investPick=Rail.stepPick(investPick,1);paintInvest() end)
+        for name,share in Rail.PRESETS do
+            local chip=ready.Presets:FindFirstChild(name)
+            if chip then chip.Activated:Connect(function() investPick=if share>=1 then nil else share;paintInvest() end) end
+        end
+        ready.Key.Activated:Connect(function()
+            local o=option("stock_exchange");if not o or o.kind~="invest" or not latest or type(o.active)=="table" then return end
+            local amount=Rail.investAmount(o.stake,investPick);if amount<=0 then return end
+            remotes.Command:FireServer({kind="UsePremium",unitType="stock_exchange",matchId=latest.matchId,amount=amount})
+            investPick=nil;paintInvest() -- the card stays open: it turns into the Running card when the server's packet lands
+        end)
+    elseif investCard then
         investCard.Key.Activated:Connect(function()
             local o=option("stock_exchange");if not o or o.kind~="invest" or not latest or type(o.active)=="table" then return end
             remotes.Command:FireServer({kind="UsePremium",unitType="stock_exchange",matchId=latest.matchId})
@@ -684,7 +862,11 @@ function M.start()
     end
     -- the hover / long-press card's content (City.premiumTip: the dock's own BlueprintTooltip)
     City.premiumHooks.tip=function(item: string): any?
-        local o=option(item);if not o then return nil end
+        local o=option(item)
+        if not o then -- the rail's locked card: what it does, its Cobalt price, where to get it
+            local it=Arsenal.byId[item];if not (rail and it) then return nil end
+            return {title=it.name,purpose=EFFECT[item] or "",reason=nil,state="blocked",price="◆ "..Rail.short(it.cobalt or 0).." Cobalt",owned="Unlock it in the Armory"}
+        end
         local icon=ICON_OF[item] or item
         local name=if o.kind=="train" then "Train" elseif o.kind=="invest" then "Invest" else ((Arsenal.byId[icon] and Arsenal.byId[icon].name) or item)
         local st,why=stateOf(o)
@@ -715,8 +897,8 @@ function M.start()
         local touch=UserInputService.TouchEnabled and not UserInputService.MouseEnabled
        local title=string.upper(name)..(if option and option.cost then " · "..short(option.cost).." gold" else "")
         if placeReason then return title,placeReason end
-        if optionKind[item]=="launch" then return title,if touch then "Tap a target to launch" else "Click a target · Esc cancel" end
-        return title,if touch then "Tap your land to place" else "Click your land · Esc cancel"
+        if optionKind[item]=="launch" then return title,if touch then "Tap a target to launch" else "Click a target · Right-click cancel" end
+        return title,if touch then "Tap your land to place" else "Click your land · Right-click cancel"
     end
     local armedAt=0 -- the arming click's own release must never place (live: it launched a Blitz at the tile under the dock)
     -- touch + a launch item: the panel is the base nukes' aim bar (name, cost, a chip, Launch)
@@ -740,6 +922,7 @@ function M.start()
         if gridOpen then setGrid(false) end
         if placing==item then placing=nil;City.premiumPlacement(nil) else
             placing=item;reword()
+            if okBuildAnim and buttons[item] then (BuildAnim :: any).press(buttons[item],true) end -- PF - 4: the card squashes
         end
         draw()
     end
@@ -748,6 +931,12 @@ function M.start()
         local kind=optionKind[placing :: string]
         if kind=="launch" then remotes.Command:FireServer({kind="LaunchPremium",unitType=placing,targetId=tile,matchId=latest.matchId})
         else remotes.Command:FireServer({kind="BuildPremium",unitType=placing,targetId=tile,matchId=latest.matchId}) end
+        -- PF - 4: the card's gold confirm (the light runs round it, a shine crosses it) and its cost floats up
+        local card=placing and buttons[placing :: string]
+        if okBuildAnim and card then
+            local cost=nil;for _,o in latest.options or {} do if o.item==placing and type(o.cost)=="number" and o.cost>0 then cost=short(o.cost) end end
+            (BuildAnim :: any).confirm(card,true,cost)
+        end
         holdCatcher=os.clock()+.2;placing=nil;pinned=nil;City.premiumPlacement(nil);draw()
         task.delay(.25,draw)
     end

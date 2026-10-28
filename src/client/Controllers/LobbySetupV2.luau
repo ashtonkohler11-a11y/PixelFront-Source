@@ -7,6 +7,7 @@
 --   12 rule tiles (switches; ‹ value › steppers, Time limit runs Off ‹ 5 .. 120 ›) + Reset · bans: base weapons + premium items
 -- V2.rules / V2.bans / V2.stepRule are pure (the model passed in): tools/test-pf3-setup-v2.luau.
 local V2={};V2.__index=V2
+local Motion: any=nil -- PF - 4's UiMotion (build-out motion), set in new(); absent in the CLI tests
 V2.RULES={{"startingGold","v"},{"goldMultiplier","v"},{"customAllianceDuration","v"},{"maxTimerValue","v"},{"infiniteGold","t"},
     {"infiniteTroops","t"},{"instantBuild","t"},{"randomSpawn","t"},{"donateGold","t"},{"donateTroops","t"},{"doomsdayClock","t"},{"overtime","t"}}
 V2.RULE_KEYS={"startingGold","goldMultiplier","customAllianceDuration","maxTimerValue","infiniteGold","infiniteTroops","instantBuild",
@@ -75,13 +76,18 @@ function V2.new(layer: Frame,options: any): any
     self.change=change
     local Line=require(script.Parent.TopbarLine)
     Line.keepRight(layer.Top,self.connections);Line.clearBelow(canvas,self.connections)
-    listen(find(canvas,"MapCard.Change").Activated,function() if not self.readOnly and options.onPickMap then options.onPickMap() end end)
-    for _,d in {"Easy","Medium","Hard","Impossible"} do listen(find(canvas,"Nations."..d).Activated,function() if self.settings.nations>0 then change(M.setDifficulty(self.settings,d),"difficulty") end end) end
-    listen(find(canvas,"Mode.FFA").Activated,function() change(M.setMode(self.settings,"Free For All"),"gameMode") end)
-    listen(find(canvas,"Mode.Team").Activated,function() change(M.setMode(self.settings,"Team"),"gameMode") end)
+    if Line.scaleTitle then Line.scaleTitle(layer.Top:FindFirstChild("Title"),self.connections) end -- R1: the title scales like desk
+    -- UI audit R8: the small keys answer on their finger zones too (HitZone; author-pf3-hit-zones)
+    local HitZone=require(script.Parent.HitZone)
+    local okM,UiMotion=pcall(function() return require(script.Parent.UiMotion) end);Motion=if okM and type(UiMotion)=="table" then UiMotion else nil
+    local function tap(key: any): any return HitZone.signal(key) end
+    listen(tap(find(canvas,"MapCard.Change")),function() if not self.readOnly and options.onPickMap then options.onPickMap() end end)
+    for _,d in {"Easy","Medium","Hard","Impossible"} do listen(tap(find(canvas,"Nations."..d)),function() if self.settings.nations>0 then change(M.setDifficulty(self.settings,d),"difficulty") end end) end
+    listen(tap(find(canvas,"Mode.FFA")),function() change(M.setMode(self.settings,"Free For All"),"gameMode") end)
+    listen(tap(find(canvas,"Mode.Team")),function() change(M.setMode(self.settings,"Team"),"gameMode") end)
     for _,v in M.TEAM_CHIPS do
         local chip=find(canvas,"Mode.Teams."..(if v=="Humans Vs Nations" then "TeamHvN" else "Team"..tostring(v)))
-        if chip then listen(chip.Activated,function() change(M.setTeams(self.settings,v),"playerTeams") end) end
+        if chip then listen(tap(chip),function() change(M.setTeams(self.settings,v),"playerTeams") end) end
     end
     for _,spec in {{row=find(canvas,"Forces.NationsSlider"),key="nations",max=Availability.MaxNations},{row=find(canvas,"Forces.TribesSlider"),key="bots",max=Availability.MaxTribes}} do
         local s: any=spec
@@ -106,11 +112,20 @@ function V2.new(layer: Frame,options: any): any
         if kind=="t" then
             for _,b in {tile:FindFirstChild("Switch"),tile:FindFirstChild("Hit")} do if b then listen(b.Activated,function() change(M.toggle(key,self.settings),key) end) end end
         else
-            listen(tile.Step.Minus.Activated,function() change(V2.stepRule(M,key,self.settings,-1),key) end)
-            listen(tile.Step.Plus.Activated,function() change(V2.stepRule(M,key,self.settings,1),key) end)
+            listen(tap(tile.Step.Minus),function() change(V2.stepRule(M,key,self.settings,-1),key) end)
+            listen(tap(tile.Step.Plus),function() change(V2.stepRule(M,key,self.settings,1),key) end)
         end
     end
-    listen(find(canvas,"Rules.Reset").Activated,function() change(V2.resetRules(M,self.settings),"rules") end)
+    listen(tap(find(canvas,"Rules.Reset")),function() change(V2.resetRules(M,self.settings),"rules") end)
+    -- UI audit build-out (R21: "Rules (10) + Bans (24) up front overwhelm a new host"): Rules and Bans start folded under
+    -- PFAdvanced covers (author-pf3-build-lobby: a dim veil over each card + one "Advanced rules ›" key); a tap opens both for
+    -- the session on every setup screen. Changed rules keep them open (a lobby you edited never hides its own rules).
+    self.covers={}
+    for _,name in {"Rules","Bans"} do local card=canvas:FindFirstChild(name);local cover=card and card:FindFirstChild("PFAdvanced");if cover then table.insert(self.covers,cover) end end
+    for _,cover in self.covers do
+        local key=cover:FindFirstChild("Show",true)
+        if key and key:IsA("GuiButton") then listen(tap(key),function() V2.advancedOpen=true;self:paintCovers(true) end) end
+    end
     -- bans: base weapons (the old tiles' art) and premium items (PremiumSprites.icons)
     local okSprites,Sprites=pcall(function() return require(Shared.PremiumSprites) end)
     for _,tile in canvas.Bans:GetChildren() do
@@ -118,13 +133,13 @@ function V2.new(layer: Frame,options: any): any
         local unit,premium=tile:GetAttribute("Unit"),tile:GetAttribute("Premium")
         local icon=tile:FindFirstChild("Icon")
         if type(unit)=="string" then
-            listen(tile.Activated,function() change(M.toggleUnit(self.settings,unit),"disabledUnits") end)
+            listen(tap(tile),function() change(M.toggleUnit(self.settings,unit),"disabledUnits") end)
             local src=tile:GetAttribute("SourceAsset");if icon and type(src)=="string" then pcall(Icons.bind,icon,src) end
         elseif type(premium)=="string" then
-            listen(tile.Activated,function() change(M.togglePremium(self.settings,premium),"disabledPremium") end)
+            listen(tap(tile),function() change(M.togglePremium(self.settings,premium),"disabledPremium") end)
             local rect=okSprites and Sprites.icons.rects[premium]
             if icon and rect then icon.Image=Sprites.icons.image;icon.ImageRectOffset=Vector2.new(rect.x,rect.y);icon.ImageRectSize=Vector2.new(rect.w,rect.h) end
-        elseif tile.Name=="Clear" then listen(tile.Activated,function() change(M.clearBans(self.settings),"disabledUnits") end) end
+        elseif tile.Name=="Clear" then listen(tap(tile),function() change(M.clearBans(self.settings),"disabledUnits") end) end
     end
     listen(canvas:GetPropertyChangedSignal("AbsoluteSize"),function() self:thumbs() end)
     self:paint()
@@ -141,6 +156,20 @@ end
 function V2:set(settings: any,readOnly: boolean?)
     self.settings=self.M.normalize(settings);self.readOnly=readOnly==true;self:paint()
 end
+-- the Advanced fold: covers show until opened this session, or while every rule and ban is still the default
+function V2:paintCovers(animate: boolean?)
+    local s,M=self.settings,self.M
+    local edited=(#(s.disabledUnits or {})>0) or (#(s.disabledPremium or {})>0)
+    if not edited then
+        local def=M.defaults()
+        for _,spec in V2.RULES do if s[spec[1]]~=def[spec[1]] then edited=true;break end end
+    end
+    local open=V2.advancedOpen==true or edited
+    for _,cover in self.covers or {} do
+        if open and cover.Visible and animate and Motion then Motion.close(cover)
+        else cover.Visible=not open end
+    end
+end
 local C: any=nil
 local function colours()
     local h=Color3.fromHex
@@ -156,6 +185,7 @@ function V2:paint()
     if self.destroyed then return end
     if not C then colours() end
     local s,M,canvas,ro=self.settings,self.M,self.canvas,self.readOnly
+    self:paintCovers(false)
     -- map
     local info=M.mapInfo(s.gameMap)
     find(canvas,"MapCard.MapName").Text=info.name
@@ -204,9 +234,14 @@ function V2:paint()
         tile.RuleName.TextColor3=if lit then Color3.new(1,1,1) else C.nameOff
         if r.kind=="t" then
             local disc=tile.Disc;disc.BackgroundColor3=if r.on then C.discOn else C.discOff;disc.Glyph.ImageColor3=if r.on then Color3.new(1,1,1) else C.glyphOff
-            local sw=tile.Switch;sw.BackgroundColor3=if r.on then C.swOn else C.swOff
-            sw.Knob.BackgroundColor3=if r.on then Color3.new(1,1,1) else C.knobOff
-            sw.Knob.Position=UDim2.fromScale(if r.on then 32/64 else 4/64,4/36)
+            -- build-out motion (lobby.switches): a flipped switch slides its knob and fades its track (.12 s); a repaint stays still
+            local sw=tile.Switch
+            local goal={track=if r.on then C.swOn else C.swOff,knob=if r.on then Color3.new(1,1,1) else C.knobOff,at=UDim2.fromScale(if r.on then 32/64 else 4/64,4/36)}
+            local flipped=sw:GetAttribute("PFOn")~=nil and sw:GetAttribute("PFOn")~=r.on
+            sw:SetAttribute("PFOn",r.on)
+            if Motion and flipped then
+                Motion.tween(sw,{BackgroundColor3=goal.track},.12);Motion.tween(sw.Knob,{BackgroundColor3=goal.knob,Position=goal.at},.12)
+            else sw.BackgroundColor3=goal.track;sw.Knob.BackgroundColor3=goal.knob;sw.Knob.Position=goal.at end
             interactive(sw,not ro);interactive(tile:FindFirstChild("Hit"),not ro)
         else
             tile.Step.Value.Text=r.text

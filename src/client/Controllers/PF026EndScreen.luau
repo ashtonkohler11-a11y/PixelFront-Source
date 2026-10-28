@@ -31,7 +31,12 @@ local GOLD,STEEL,RED,GREY,CRIMSON=hex("#ffd77a"),hex("#5d6676"),hex("#e5544b"),h
 local PANEL=hex("#121418")
 local TONE={victory={hex("#3a2c10"),GOLD},defeat={CRIMSON,RED},nospawn={hex("#1d2026"),GREY},neutral={hex("#1d2026"),GREY}}
 local WORD={victory="VICTORY",defeat="DEFEAT",nospawn="DIDN'T SPAWN",cancelled="CANCELLED",over="MATCH OVER"}
+-- a catalog item's Shop tab (the Next unlock key)
+local SHOP_TAB={Skin="Skins",Flag="Profile",Crown="Profile",Frame="Profile",Banner="Profile",Nameplate="Profile",Title="Profile",
+    VFX="Effects",Buildings="Buildings",Missiles="Missiles",Bundle="Bundles"}
 local PHONE_HEIGHT=520 -- below this screen height the landscape card shows
+local NEXT={Medium=true,Hard=true,Impossible=true} -- STATS v3: the end packet's nextDifficulty
+local nextStarting=false -- the Next key was pressed: it reads "Starting…" until the card hides
 
 local state: any={matchId=-1}
 local gui: any=nil;local result: any=nil;local root: any=nil
@@ -46,6 +51,10 @@ local collect: any=nil
 local requeuing=false
 local reviveUp=false -- PIVOT D10: ReviveView's card is up (an open Revive offer): the Desk card steps aside
 local showPay: (xr: any)->() -- the Cobalt row from the end packet's xpResult (defined with the row, below)
+-- UI audit build-out 2026-10-28: the shared motion kit (PF - 4's UiMotion); nil where it can't load
+local Motion: any=(function() local ok,mod=pcall(function() return require(script.Parent.UiMotion) end);return if ok and type(mod)=="table" and type(mod.tween)=="function" then mod else nil end)()
+local counted: {[Instance]: number}={} -- a "+N" label already counted up for this match
+local loops: {()->()}={} -- the card's breathing / ticking while it shows
 
 local function art(): any local ok,a=pcall(require,script.Parent.CosmeticArt);return if ok then a else nil end
 local function grouped(n: number): string
@@ -76,6 +85,7 @@ local function observe(packet: any)
     local xr=packet.xpResult
     if type(xr)=="table" and state.paid~=(xr.matchKey or true) then state.paid=xr.matchKey or true;showPay(xr) end
     state.config=s.gameConfig;state.elapsed=s.elapsed;state.phase=s.phase
+    if type(packet.nextDifficulty)=="string" then state.next=packet.nextDifficulty end -- STATS v3: a Solo win below Impossible
     local me=type(s.players)=="table" and s.players[1] or nil
     if me then state.name=me.name;state.flag=me.flag;if me.spawnTile~=nil then state.spawned=true end end
     local cfg=type(s.gameConfig)=="table" and s.gameConfig or {}
@@ -162,10 +172,15 @@ local function paintText(v: any,kind: string)
     local phoneRank=r:FindFirstChild("Rank");if phoneRank and phoneRank:IsA("TextLabel") then phoneRank.Text=if rank and of and of>0 then rankText.." of "..of else rankText;phoneRank.Visible=not nospawn end
     setVis(r:FindFirstChild("Why"),nospawn and r:FindFirstChild("NoLanding")==nil) -- the NO LANDING tile already says it
 end
+-- Play again where it has a next match: Solo (and, MM 2026-10-27 "leaving feeds the requeue", the tutorial: its next
+-- match is a Solo on the same server) and public matches; not custom rooms, spectators or a cancelled match.
+local function againAllowed(kind: string?): boolean
+    local custom=state.online and state.kind~=nil and state.kind~="public"
+    return not state.spectator and not (state.tutorial and state.online) and not custom and kind~="cancelled" and (not state.online or state.kind=="public")
+end
 local function paintKeys(v: any,kind: string)
     local keys=v.root:FindFirstChild("Keys");if not keys then return end
-    local custom=state.online and state.kind~=nil and state.kind~="public"
-    local again=not state.spectator and not state.tutorial and not custom and kind~="cancelled" and (not state.online or state.kind=="public")
+    local again=againAllowed(kind)
     -- Ashton 2026-10-12: "add a keep playing button on the end tutorial menu aswell, some may wanna keep playing". A
     -- tutorial win offers the watch key as "Keep playing" (it closes the card; the match runs on after a win), with the
     -- sheet's land cell instead of the eye.
@@ -183,6 +198,30 @@ local function paintKeys(v: any,kind: string)
     -- PF043 D1c: Play again is the big key (Return to lobby takes it where there's no Play again); Keep playing + Return share row two
     if v.root:GetAttribute("PF043Simple")==true then
         setVis(keys:FindFirstChild("Again"),again);setVis(keys:FindFirstChild("ReturnBig"),not again)
+        -- STATS v3 §v3.5 (author-pf1-next-key): a Solo win below Impossible splits the row: Play again (narrow) + Next: <mode> ▶
+        local nxt=keys:FindFirstChild("PFNext");local ag=keys:FindFirstChild("Again")
+        local on=nxt~=nil and ag~=nil and again and kind=="victory" and not state.online and NEXT[state.next]==true
+        if nxt and ag then
+            local tag=if on then "PFSplit" else "PFFull"
+            local lb=ag:FindFirstChild("Label")
+            for _,n in {ag,lb} do
+                local p,s=n and n:GetAttribute(tag.."Pos"),n and n:GetAttribute(tag.."Size")
+                if typeof(p)=="UDim2" and n.Position~=p then n.Position=p end;if typeof(s)=="UDim2" and n.Size~=s then n.Size=s end
+            end
+            nxt.Visible=on
+            -- UI audit build-out 2026-10-28 (PF - 2's money path: Easy pays a quarter): the key says what the step up pays,
+            -- from Config.MatchCobalt.Solo ("Next: Medium  pays 2×"; nothing when it doesn't pay more)
+            local nl=nxt:FindFirstChild("Label")
+            if on and nl and not nextStarting then
+                local solo=(require(RS.Shared:WaitForChild("Config")) :: any).MatchCobalt.Solo
+                local cur=type(state.config)=="table" and state.config.difficulty or nil
+                local r=if solo and cur and solo[cur] and solo[state.next] and solo[cur]>0 then solo[state.next]/solo[cur] else 1
+                local x=if math.abs(r-math.floor(r+.5))<.05 then tostring(math.floor(r+.5)) else string.format("%.1f",r)
+                nl.RichText=true
+                nl.Text=if r>1.05 then '<font size="100">Next: '..tostring(state.next)..'</font><font size="66" color="#6b4300">  pays '..x..'×</font>'
+                    else "Next: "..tostring(state.next)
+            end
+        end
         setVis(keys:FindFirstChild("Watch"),again and watch);setVis(keys:FindFirstChild("Return"),again and watch)
         setVis(keys:FindFirstChild("ReturnWide"),again and not watch);setVis(keys:FindFirstChild("WatchWide"),watch and not again)
         return
@@ -202,7 +241,7 @@ local function busy(on: boolean)
                 local sock=ret:FindFirstChild("Socket");if sock then setVis(sock:FindFirstChild("Icon"),not on or requeuing);setVis(sock:FindFirstChild("Spinner"),on and not requeuing) end
             end
         end
-        for _,name in {"Watch","WatchWide","Again","AgainWide"} do
+        for _,name in {"Watch","WatchWide","Again","AgainWide","PFNext"} do
             local k=keys and keys:FindFirstChild(name)
             if k and not (requeuing and name=="Again") then k.Active=not on;k.BackgroundTransparency=if on then .5 else 0 end
         end
@@ -292,34 +331,123 @@ M.paintRewards=paintRewards -- tests / the stage
 -- the Unlock row names the next item to save for (xpResult.cobaltUnlock {name, price, balance}).
 local cobaltShown=0
 local pay: any={double=nil,doubled=false,unlock=nil,bought=false}
+-- UX audit #5 (Ashton: "Ship it"): a player who owns no Armory item sees the cheapest Starter pack in the Unlock row (its
+-- items, its R$ key) instead of the cosmetic unlock. Ownership: the CosmeticsState packet's arsenal.owned (M.attach).
+local arsenal: any={owned={},known=false,double=nil}
+local starterPacks: {any}=(function()
+    local okA,A=pcall(function() return require(RS:WaitForChild("Shared"):WaitForChild("ArsenalCatalog")) end)
+    return if okA and type(A)=="table" and type(A.packs)=="table" then A.packs else {}
+end)()
+local starterNames: {[string]: string}=(function()
+    local okA,A=pcall(function() return require(RS:WaitForChild("Shared"):WaitForChild("ArsenalCatalog")) end)
+    local names={};if okA and type(A)=="table" then for _,it in A.items or {} do names[it.id]=it.name end end
+    return names
+end)()
+local function starterPick(): any?
+    if not arsenal.known then return nil end
+    -- Ashton 2026-10-28 ("show it as much as possible"): the Starter Pack shows until its every item is owned (was: only
+    -- to a player owning no Armory item)
+    local best=nil
+    for _,pack in starterPacks do
+        local missing=false;for _,id in pack.items or {} do if arsenal.owned[id]~=true then missing=true end end
+        if missing and type(pack.productId)=="number" and pack.productId>0 and type(pack.robux)=="number" and (best==nil or pack.robux<best.robux) then best=pack end
+    end
+    return best
+end
 local function doublePass(): any
     local id=MatchCobalt.doublePass();return id and Catalog.passById and Catalog.passById[id] or nil
+end
+-- the 2x pass's price: Roblox's PriceInRobux (asked once), the catalog's until it answers or if it can't
+local livePass: {[number]: number|boolean}={}
+local function passPrice(pass: any): number?
+    if not pass then return nil end
+    local id=tonumber(pass.passId)
+    if id and id>0 then
+        local known=livePass[id]
+        if type(known)=="number" then return known end
+        if known==nil then
+            livePass[id]=false
+            task.spawn(function()
+                local ok,info=pcall(function() return Marketplace:GetProductInfo(id,Enum.InfoType.GamePass) end)
+                if ok and type(info)=="table" and type(info.PriceInRobux)=="number" then
+                    livePass[id]=info.PriceInRobux
+                    if result and result.Visible then M.refresh() end
+                end
+            end)
+        end
+    end
+    return tonumber(pass.robux)
+end
+-- what the match was, for a card that paid no Cobalt: "12% land · 4:31" (your best share of the land, the match's length)
+local function resultLine(): string
+    local parts={}
+    if (state.peakLand or 0)>0 then table.insert(parts,string.format("%d%% land",math.max(1,math.floor(state.peakLand*100+.5)))) end
+    if type(state.elapsed)=="number" and state.elapsed>0 then table.insert(parts,clock(state.elapsed)) end
+    return table.concat(parts," · ")
 end
 local function paintCobalt(v: any)
     setVis(v.root:FindFirstChild("Xp"),false)
     local row=v.root:FindFirstChild("Cobalt");if not row then return end
     -- v9 plate (author-pf043-end-simple): the content sits in PFBody; older plates keep it at the root
     local box=row:FindFirstChild("PFBody") or row
-    -- RELEASE-QA #11: a match that paid nothing (a replayed tutorial) shows no "COBALT EARNED +0" plate
-    if cobaltShown<=0 and not pay.bought then setVis(row,false);return end
+    -- RELEASE-QA #11: a match that paid nothing never shows "COBALT EARNED +0". UI audit build-out 2026-10-28 (a new player's
+    -- first end cards had only keys): it keeps the plate as THIS MATCH + the result line ("12% land · 4:31") in the "+N" slot,
+    -- with the 2x box (for a player without the pass) and the Starter box (while it sells); nothing to say or sell: no plate
+    local zero=cobaltShown<=0 and not pay.bought
     setVis(row,true)
-    local amount=box:FindFirstChild("Amount");if amount then amount.Text="+"..grouped(cobaltShown) end
+    local label=box:FindFirstChild("Label");if label then label.Text=if zero then "THIS MATCH" else "COBALT EARNED" end
+    local amount=box:FindFirstChild("Amount")
+    if amount and zero then amount.Text=resultLine()
+    elseif amount and Motion and counted[amount]~=state.matchId then
+        -- the match's pay counts up from 0 (.6 s) the first time the card shows it
+        counted[amount]=state.matchId
+        Motion.count(amount,cobaltShown,{from=0,time=.6,format=function(n: number) return "+"..grouped(n) end})
+    elseif amount then amount.Text="+"..grouped(cobaltShown) end
     local pass=doublePass()
     local active=pay.doubled or pay.bought
     local chip=box:FindFirstChild("Double")
     if chip then
-        chip.Visible=not active and pass~=nil and type(pay.double)=="number" and pay.double>cobaltShown
+        chip.Visible=not active and pass~=nil and (if zero then arsenal.double==false else type(pay.double)=="number" and pay.double>cobaltShown)
         local l=chip:FindFirstChild("Label");if l then l.Text="2× +"..grouped(tonumber(pay.double) or 0) end
         -- v7 row: "+80 → +160", the doubled pay in gold (the Gain label is RichText)
         local g=chip:FindFirstChild("Gain")
-        if g then g.Text="+"..grouped(cobaltShown)..' → <font color="#ffd77a">+'..grouped(tonumber(pay.double) or 0).."</font>" end
+        local kicker=chip:FindFirstChild("PFJPKicker");if kicker then kicker.Text=if zero then "2× COBALT" else "DOUBLE THIS MATCH" end
+        -- the Jackpot row (author-pf1-x2-jackpot; Ashton picked A): "+80" small and struck, "+160" big gold, then the promise
+        if g and zero then
+            g.Text='<font size="100">×2</font><font size="40" color="#c6cde0">   Cobalt on every match after</font>'
+        elseif g and chip:FindFirstChild("PFJPArt") then
+            g.Text='<font size="60" color="#8d97ad"><s>+'..grouped(cobaltShown)..'</s></font><font size="56" color="#ffd157">  →  </font><font size="100">+'
+                ..grouped(tonumber(pay.double) or 0)..'</font><font size="36" color="#c6cde0">   and every match after</font>'
+        elseif g then g.Text="+"..grouped(cobaltShown)..' → <font color="#ffd77a">+'..grouped(tonumber(pay.double) or 0).."</font>" end
         local tag=chip:FindFirstChild("Tag");local p=tag and tag:FindFirstChild("Price")
-        if p then p.Text=(if g then utf8.char(0xE002).." " else "R$ ")..tostring(pass and pass.robux or "--") end
+        -- Roblox's own price once it answers (UI audit build-out 2026-10-28: the key read 199 while the pass sold at 160)
+        if p then p.Text=(if g then utf8.char(0xE002).." " else "R$ ")..tostring(passPrice(pass) or "--") end
     end
     local on=box:FindFirstChild("DoubleOn")
     setVis(on,active and cobaltShown>0)
     local un=box:FindFirstChild("Unlock");local u=pay.unlock
-    setVis(un,type(u)=="table" and type(u.price)=="number" and u.price>0)
+    local starter=if un and un:FindFirstChild("PFStarter") then starterPick() else nil
+    setVis(un,starter~=nil or (type(u)=="table" and type(u.price)=="number" and u.price>0))
+    if un then -- the Starter face (author-pf043-end-simple v12) or the cosmetic one
+        for _,name in {"Lock","Name","Bar","Numbers","Chevron"} do setVis(un:FindFirstChild(name),starter==nil) end
+        local face=un:FindFirstChild("PFStarter");setVis(face,starter~=nil)
+        if face and starter then
+            local title=face:FindFirstChild("Title");if title then title.Text=tostring(starter.name) end
+            local list={};for _,id in starter.items or {} do table.insert(list,starterNames[id] or id) end
+            -- (a Jackpot face's line is StarterOffer's: it knows an owned item comes as Cobalt)
+            local items=face:FindFirstChild("Items");if items and face:GetAttribute("PFStarterJackpot")==nil then items.Text=table.concat(list," + ") end
+            -- (the price: StarterOffer paints Roblox's live one on this face, PFStarterJackpot "paint")
+        end
+    end
+    pay.starter=starter
+    if zero and amount and amount.Text=="" and not (chip and chip.Visible) and not (un and un.Visible) then setVis(row,false);return end
+    -- STATS v3: the 2x chip and the Starter pack are products seen on the end card (once a match)
+    if pay.seenFor~=state.matchId and ((chip and chip.Visible) or starter) then
+        pay.seenFor=state.matchId
+        pcall(function() local SR=require(script.Parent.StatsReport)
+            if chip and chip.Visible then SR.seen("double2x","end") end
+            if starter then SR.seen(tostring(starter.id),"end") end end)
+    end
     -- RELEASE-QA #10: the plate is as tall as its lines (the authored state sizes; no empty band under "+N")
     local two=(chip~=nil and chip.Visible) or (on~=nil and on.Visible);local low=un~=nil and un.Visible
     local state=if two and low then "Full" elseif two then "TwoX" elseif low then "Unlock" else "Bare"
@@ -334,7 +462,7 @@ local function paintCobalt(v: any)
         local slot=un:GetAttribute(if empty then "PFSlotUp" else "PFSlotDown")
         if typeof(slot)=="UDim2" and un.Position~=slot then un.Position=slot end
     end
-    if un and type(u)=="table" and type(u.price)=="number" and u.price>0 then
+    if un and starter==nil and type(u)=="table" and type(u.price)=="number" and u.price>0 then
         local balance=math.max(0,tonumber(u.balance) or 0)+(if pay.bought and not pay.doubled then math.max(0,cobaltShown-(tonumber(u.earned) or cobaltShown)) else 0)
         local nm=un:FindFirstChild("Name");if nm then nm.Text=tostring(u.name or "Next unlock") end
         local bar=un:FindFirstChild("Bar");local f=bar and bar:FindFirstChild("Fill");if f then f.Size=UDim2.fromScale(math.clamp(balance/u.price,0,1),1) end
@@ -344,6 +472,7 @@ end
 local function buyDouble()
     local pass=doublePass()
     if not pass or type(pass.passId)~="number" or pass.passId<=0 or pay.doubled or pay.bought then return end -- no Game Pass yet: truthful no-op
+    pcall(function() require(script.Parent.StatsReport).prompt("double2x","end") end) -- STATS v3
     pcall(function() Marketplace:PromptGamePassPurchase(Players.LocalPlayer,pass.passId) end)
 end
 -- bought: count the "+N" up to the doubled pay (0.6 s), then the chip reads ACTIVE
@@ -380,7 +509,7 @@ function M.refresh()
     -- gamepad: the first key (RevampInterface focuses the hidden legacy Continue)
     if UIS.GamepadEnabled then task.defer(function()
         local v=activeView();local ks=v and v.root:FindFirstChild("Keys");local k=nil
-        for _,name in {"Again","ReturnBig","Return"} do local c=ks and ks:FindFirstChild(name);if c and c.Visible and v.root:GetAttribute("PF043Simple")==true then k=c;break end end -- PF043 D1c
+        for _,name in {"PFNext","Again","ReturnBig","Return"} do local c=ks and ks:FindFirstChild(name);if c and c.Visible and v.root:GetAttribute("PF043Simple")==true then k=c;break end end -- PF043 D1c
         k=k or (ks and ks:FindFirstChild("Return"))
         if k and result.Visible then GuiService.SelectedObject=k end
     end) end
@@ -401,7 +530,24 @@ function M.attach(resultFrame: any)
             if node and node:IsA("GuiObject") then node.Visible=not result.Visible end
         end
     end
-    result:GetPropertyChangedSignal("Visible"):Connect(function() hudClear();if result.Visible then M.refresh() else requeuing=false;busy(false) end end)
+    -- the card's entrance (UiMotion): .9 -> 1 from the centre, the word stamps 1.3 -> 1, the keys come in last (staggered);
+    -- then Play again breathes (the fastest way on, R9). (The 2x / Starter boxes' own tick + sheen are PF - 4's JackpotMotion.)
+    -- A tap finishes all of it.
+    local function enter()
+        for _,stop in loops do stop() end;table.clear(loops)
+        local v=Motion and activeView();if not v then return end
+        Motion.open(v.root,{from=.9})
+        local word=v.root:FindFirstChild("Word");if word and word:IsA("GuiObject") then task.delay(.12,function() if result.Visible then Motion.pop(word,1.3,.18) end end) end
+        local keys=v.root:FindFirstChild("Keys");local list={}
+        for _,k in (if keys then keys:GetChildren() else {}) do if k:IsA("GuiObject") and k.Visible then table.insert(list,k) end end
+        Motion.stagger(list)
+        local again=keys and keys:FindFirstChild("Again");if again and again.Visible then table.insert(loops,Motion.breathe(again)) end
+    end
+    result:GetPropertyChangedSignal("Visible"):Connect(function()
+        hudClear()
+        if result.Visible then M.refresh();enter()
+        else requeuing=false;nextStarting=false;busy(false);for _,stop in loops do stop() end;table.clear(loops) end
+    end)
     -- PF043 D1c: after Play again the big key shows "Next match · 0:18" (or "Finding a match…") from hooks.requeueState only
     Run.RenderStepped:Connect(function()
         if not requeuing or not result.Visible then return end
@@ -414,6 +560,9 @@ function M.attach(resultFrame: any)
             if l then l.Visible=false end
             if bt then bt.Visible=true;if bt.Text~=title then bt.Text=title end end
             if sb then sb.Visible=sub~="";if sb.Text~=sub then sb.Text=sub end end
+            -- the title alone sits on the key's centre line (its authored PFPosAlone; PFPosSub with the countdown under it)
+            local p=bt and bt:GetAttribute(if sub~="" then "PFPosSub" else "PFPosAlone")
+            if bt and typeof(p)=="UDim2" and bt.Position~=p then bt.Position=p end
             local sock=k:FindFirstChild("Socket");if sock then setVis(sock:FindFirstChild("Icon"),false);local sp=sock:FindFirstChild("Spinner");if sp then sp.Visible=true;sp.Rotation=os.clock()*360 end end
         end
     end)
@@ -429,6 +578,39 @@ function M.attach(resultFrame: any)
             local hit=chip:FindFirstChild("PFHit");if hit and hit:IsA("GuiButton") then hit.Activated:Connect(function() if chip.Visible then buyDouble() end end) end
         end
     end
+    -- UX audit #4: the Next unlock row is a key (author-pf043-end-simple v11's PFKey over it): the Shop opens over the match on
+    -- that item's tab (MatchController's Feed.context.openShopAt). The item: xr.cobaltUnlock.id, else its name + price.
+    for _,v in views do
+        local un=v.root:FindFirstChild("Cobalt") and v.root.Cobalt:FindFirstChild("Unlock",true)
+        local key=un and un:FindFirstChild("PFKey")
+        if key and key:IsA("GuiButton") then key.Activated:Connect(function()
+            if not un.Visible then return end
+            -- UX audit #5: the Starter face buys its pack
+            local st=pay.starter
+            if st then
+                pcall(function() require(script.Parent.StatsReport).prompt(tostring(st.id),"end") end) -- STATS v3
+                pcall(function() Marketplace:PromptProductPurchase(Players.LocalPlayer,st.productId) end);return
+            end
+            local u=pay.unlock;if type(u)~="table" then return end
+            local item=(type(u.id)=="string" and Catalog.byId and Catalog.byId[u.id]) or nil
+            if not item then for _,it in Catalog.items or {} do if it.name==u.name and tonumber(it.price)==tonumber(u.price) then item=it;break end end end
+            local open=Feed.context and Feed.context.openShopAt
+            if open then pcall(open,item and SHOP_TAB[item.category] or nil) end
+        end) end
+    end
+    -- UX audit #5: Armory ownership for the Starter face (the same packet the Armory page reads)
+    task.spawn(function()
+        local folder=RS:WaitForChild("OpenFrontRemotes",30);local state=folder and folder:WaitForChild("CosmeticsState",30)
+        if not (state and state:IsA("RemoteEvent")) then return end
+        state.OnClientEvent:Connect(function(packet: any)
+            if type(packet)=="table" and packet.kind=="Cosmetics" and type(packet.arsenal)=="table" and type(packet.arsenal.owned)=="table" then
+                arsenal.owned=packet.arsenal.owned;arsenal.known=true
+                -- the 2x pass's ownership (the 0-Cobalt card offers it only to a player who doesn't own it)
+                local id=MatchCobalt.doublePass();if id and type(packet.owned)=="table" then arsenal.double=packet.owned[id]==true end
+                if result and result.Visible then for _,v in views do paintCobalt(v);fit(v) end end
+            end
+        end)
+    end)
     Marketplace.PromptGamePassPurchaseFinished:Connect(function(player: Player,passId: number,purchased: boolean)
         local pass=doublePass()
         if player==Players.LocalPlayer and purchased and pass and passId==pass.passId and result and result.Visible then onDoubleBought() end
@@ -467,6 +649,14 @@ function M.bind(resultFrame: any,h: any)
             if hooks.playAgain then hooks.playAgain({online=state.online,kind=state.kind,config=state.config}) end
         end
         on("Again",again);on("AgainWide",again)
+        -- STATS v3 §v3.5: Next: <mode> ▶ starts the next difficulty up on the same map, Play again's own Solo path
+        on("PFNext",function()
+            local nd=state.next;if not NEXT[nd] or type(state.config)~="table" or not hooks.playAgain then return end
+            local config=table.clone(state.config);config.difficulty=nd
+            nextStarting=true
+            local nl=keys.PFNext:FindFirstChild("Label");if nl then nl.Text="Starting…" end
+            hooks.playAgain({online=state.online,kind=state.kind,config=config})
+        end)
     end
 end
 -- PIVOT D10 (ReviveView): the Revive card takes the Desk's place while the offer is open; its Keep watching / Return run the
@@ -477,6 +667,13 @@ function M.setRevive(on: boolean)
 end
 function M.run(name: string)
     local fn=hooks[name];if type(fn)=="function" then fn() end
+end
+-- The Revive card's decline (MM 2026-10-27, leaving feeds the requeue): Play again when this match has a next one.
+function M.canPlayAgain(): boolean return state~=nil and hooks.playAgain~=nil and againAllowed(nil) end
+function M.playAgain(): boolean
+    if not M.canPlayAgain() then return false end
+    hooks.playAgain({online=state.online,kind=state.kind,config=state.config})
+    return true
 end
 M._state=function() return state end -- tests
 return M

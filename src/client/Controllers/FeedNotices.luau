@@ -104,7 +104,7 @@ function M.diff(state: any,packet: any,m: any,cityPrice: number?,offscreen: ((nu
                         end
                     end
                 end
-                say((if by then name(state,by) else "A SAM").." shot down your "..BOMB_NAMES[kind],"WARNING","SAMLauncherGlyph",by)
+                say((if by then name(state,by) else "A SAM Launcher").." shot down your "..BOMB_NAMES[kind],"WARNING","SAMLauncherGlyph",by)
             end
         elseif kind=="Transport" and e.owner==1 and e.reachedTarget then say("Your boat landed","POSITIVE","Boat") end
     end

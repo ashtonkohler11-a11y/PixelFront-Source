@@ -14,6 +14,11 @@ local DP=require(script.Parent.DiplomacyPresentation)
 local ActionModel=require(script.Parent.PlayerActionsModel) -- PF022: disabled-slice reasons
 local Icons=require(script.Parent.ReferenceIcons)
 local BuildingRenderer=require(script.Parent.BuildingRenderer)
+-- UI audit build-out 2026-10-28: the shared motion kit (PF - 4's UiMotion); nil where it can't load (test fakes)
+local Motion: any=(function() local ok,mod=pcall(function() return require(script.Parent.UiMotion) end);return if ok and type(mod)=="table" and type(mod.tween)=="function" then mod else nil end)()
+-- PF - 3's HitZone: a key's Activated, also from its invisible finger-zone strips (falls back to the key alone in test fakes)
+local HitZone: any=(function() local ok,mod=pcall(function() return require(script.Parent.HitZone) end);return if ok and type(mod)=="table" and type(mod.signal)=="function" then mod else nil end)()
+local function activated(key: any): any return if HitZone then HitZone.signal(key) else key.Activated end
 local BonusRenderer=require(script.Parent.BonusRenderer)
 local TweenService=game:GetService("TweenService")
 local TextBounds=require(script.Parent.BattleHudTextBounds)
@@ -22,6 +27,7 @@ local Names=require(game:GetService("ReplicatedStorage").Shared.OpenFrontClientN
 local UserInputService=game:GetService("UserInputService")
 local Theme=table.clone(require(game:GetService("ReplicatedStorage").Shared.Theme))
 local HudTheme=require(script.Parent.BattleHudTheme)
+local PB:(string)->(),PE:()->()=(debug :: any).profilebegin or function(_: string) end,(debug :: any).profileend or function() end -- microprofile labels (no-ops outside Roblox)
 Theme.Panel=HudTheme.Panel;Theme.PanelRaised=HudTheme.Raised;Theme.Border=HudTheme.Border
 Theme.Accent=HudTheme.Cobalt;Theme.Gold=HudTheme.Gold;Theme.Danger=HudTheme.Danger
 Theme.Text=HudTheme.Text;Theme.MutedText=HudTheme.Muted;Theme.CommandCobalt=HudTheme.Cobalt
@@ -36,6 +42,8 @@ local BUILD_ORDER={"AtomBomb","MIRV","HydrogenBomb","Warship","Port","MissileSil
 local STRUCTURE_ORDER={"Port","MissileSilo","SAMLauncher","DefensePost","City","Factory"}
 local ATTACK_ORDER={"AtomBomb","MIRV","HydrogenBomb","Warship"}
 local SOURCE_NAMES={DefensePost="Defense Post",MissileSilo="Missile Silo",SAMLauncher="SAM Launcher",AtomBomb="Atom Bomb",HydrogenBomb="Hydrogen Bomb"}
+-- PF - 4 building animations (Ashton 2026-10-27): the card squashes when picked, flashes + floats its cost when placed
+local okBuildAnim,BuildAnim=pcall(require,script.Parent.BuildAnim)
 local DESCRIPTIONS={Warship="Captures trade ships, destroys ships and boats",Port="Sends trade ships to generate gold",City="Increases max population",Factory="Creates railroads and spawns trains",DefensePost="Increases defenses of nearby borders",MissileSilo="Used to launch nukes",SAMLauncher="Defends against incoming nukes",AtomBomb="Small explosion",HydrogenBomb="Large explosion",MIRV="Huge explosion, only targets selected player"}
 -- PF022 (MM): a disabled root slice is a readable dark plate (not a 60%-faded ghost) carrying its reason.
 local PLATE,PLATE_ALPHA=Color3.fromHex("#3a3f47"),.12
@@ -152,7 +160,8 @@ function City.new(ui: Frame,world: Frame,callbacks: any)
             callback(...)
         end))
     end
-    listen(self.placement.Cancel.Activated,function() self:clearGhost() end)
+    -- UI audit build-out: Cancel's finger zone (PF - 3's HitZone strips, authored by author-pf1-buildout) fires it too
+    listen(activated(self.placement.Cancel),function() self:clearGhost() end)
     -- PF-040: the aim bar (Placement.PFAim, tools/atlas/author-pf040.luau): Launch fires the pinned target on touch
     local aim=self.placement:FindFirstChild("PFAim")
     local launch=aim and aim:FindFirstChild("Launch",true)
@@ -218,7 +227,7 @@ function City.new(ui: Frame,world: Frame,callbacks: any)
     end
     listen(ui.Controls:GetPropertyChangedSignal("Visible"),function() self:refreshBlueprints() end)
     if self.menu then
-        local function retire() self:retireCatalog() end
+        local function retire() self.catalogClean=nil;self:retireCatalog() end
         listen(self.menu:GetPropertyChangedSignal("Visible"),retire)
         listen(self.menu:GetPropertyChangedSignal("Active"),retire)
         listen(self.menu:GetPropertyChangedSignal("Selectable"),retire)
@@ -395,8 +404,14 @@ function City:update(state: any,colors: any,palettes: any)
     if self.destroyed then return end
     self.state=state;self.cache={}
     self:refreshBuildConfiguration()
-    self.gold.Value.Text=self.callbacks.formatNumber((state.gold and state.gold[1]) or 0)
-    local bonus=self.bonuses:update(state)
+    -- the gold rolls toward each new total (.25 s); a big gain (>= 10%) punches the coin 1.15 -> 1
+    local gold=(state.gold and state.gold[1]) or 0
+    if Motion then
+        Motion.count(self.gold.Value,gold,{format=self.callbacks.formatNumber,time=.25})
+        if self.lastGold and self.lastGold>0 and gold-self.lastGold>=self.lastGold*.1 then Motion.pop(self.gold.Coin,1.15,.2) end
+    else self.gold.Value.Text=self.callbacks.formatNumber(gold) end
+    self.lastGold=gold
+    PB("PF.Cities.Bonuses");local bonus=self.bonuses:update(state);PE()
     local amount,cursor,eventId=City.conquestGain(state,self.conquestCursor)
     -- ControlPanel visits BonusEvent before ConquestEvent. Last positive local
     -- event wins, and a conquest in the same update supersedes a trade bonus.
@@ -410,11 +425,11 @@ function City:update(state: any,colors: any,palettes: any)
     end
     -- First snapshot is a baseline. Same-match full resync retains this cursor.
     self.conquestCursor=cursor
-    self.buildings:update(state,colors,palettes)
+    PB("PF.Cities.Buildings");self.buildings:update(state,colors,palettes);PE()
     if not self.callbacks.canPlay() then self:clearGhost() end
     -- PF020 perf audit: refreshBlueprints retires the catalog first; retire here only when it returns early
     if self.destroyed or not self.palette then self:retireCatalog() end
-    self:refreshBlueprints()
+    PB("PF.Cities.Blueprints");self:refreshBlueprints();PE()
 end
 function City:reset()
     self.tipControl=nil;self.tipKind=nil;self.tipLayoutKey=nil
@@ -440,15 +455,27 @@ function City:completedLevels(kind: string): number
     return levels
 end
 -- Retained only for old native templates/hooks. Catalog content has no handlers.
+-- PF - 4 perf (2026-10-27 endgame microprofile): this ran several times a packet and once a frame, re-writing ~7 properties
+-- on every catalog descendant (~700 writes) that were already retired. Now the walk runs only when something could have
+-- un-retired one: the root shows/activates again, a descendant changes or is added (the listeners in new mark it dirty),
+-- or a second has passed (a safety re-walk).
 function City:retireCatalog()
     local menu=self.menu
     if not menu or menu.Parent==nil then return end
     if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(menu) then GuiService.SelectedObject=nil end
+    local now=os.clock()
+    if self.catalogClean==menu and now<(self.catalogWalkAt or 0)+1 and not menu.Visible and not menu.Active and not menu.Selectable then return end
+    if self.catalogWatched~=menu then
+        self.catalogWatched=menu
+        local added=(menu :: any).DescendantAdded -- (CLI fakes have none: they keep the walk)
+        if added then added:Connect(function() self.catalogClean=nil end) else self.catalogWatched=nil end
+    end
     HudControls.retire(menu)
     for _,object in menu:GetDescendants() do
         if object:IsA("GuiObject") then HudControls.retire(object) end
     end
     menu:SetAttribute("CatalogRetired",true)
+    self.catalogClean=menu;self.catalogWalkAt=now
 end
 function City:refreshMenu() self:retireCatalog() end
 function City:showMenu(_tile: number?): boolean self:retireCatalog();return false end
@@ -518,9 +545,9 @@ function City:refreshBlueprints()
         self.placement.Title.Text=string.upper(Blueprint.Names[kind] or kind)..(if amount>1 then " ×"..amount else "").." · "..self.callbacks.formatNumber(price).." gold"
         local accept=InputPrompts.buttonName(Enum.KeyCode.ButtonA)
         local cancel=InputPrompts.buttonName(Enum.KeyCode.ButtonB)
-        self.placement.Description.Text=if self.state.gold[1]<price then "Need "..self.callbacks.formatNumber(price-self.state.gold[1]).." more gold" elseif gamepad then "Aim · "..accept.." place · "..cancel.." cancel" elseif touch then "Tap your land to place" else "Click your land · Esc cancel"
-        if kind=="Warship" then self.placement.Description.Text=if gamepad then "Coastal water · "..accept.." launch · "..cancel.." cancel" elseif touch then "Tap coastal water to launch" else "Click coastal water · Esc cancel"
-        elseif kind=="AtomBomb" or kind=="HydrogenBomb" or kind=="MIRV" then self.placement.Description.Text=if gamepad then "Aim · "..accept.." launch · "..cancel.." cancel" elseif touch then "Tap a target to launch" else "Click a target · Esc cancel" end
+        self.placement.Description.Text=if self.state.gold[1]<price then "Need "..self.callbacks.formatNumber(price-self.state.gold[1]).." more gold" elseif gamepad then "Aim · "..accept.." place · "..cancel.." cancel" elseif touch then "Tap your land to place" else "Click your land · Right-click cancel"
+        if kind=="Warship" then self.placement.Description.Text=if gamepad then "Coastal water · "..accept.." launch · "..cancel.." cancel" elseif touch then "Tap coastal water to launch" else "Click coastal water · Right-click cancel"
+        elseif kind=="AtomBomb" or kind=="HydrogenBomb" or kind=="MIRV" then self.placement.Description.Text=if gamepad then "Aim · "..accept.." launch · "..cancel.." cancel" elseif touch then "Tap a target to launch" else "Click a target · Right-click cancel" end
         local unavailable=self:unavailableReason(kind)
         if unavailable then self.placement.Description.Text=unavailable end
         self:paintAim(kind,price,amount,touch,unavailable)
@@ -592,7 +619,7 @@ function City:paintAim(kind: string,price: number,amount: number,touch: boolean,
     local cost=price*amount
     local why: string?=nil
     if self.state.gold[1]<cost then why="Need "..self.callbacks.formatNumber(cost-self.state.gold[1]).." gold"
-    elseif (kind=="AtomBomb" or kind=="HydrogenBomb") and self:readyMissiles()<=0 then why="No silo ready"
+    elseif (kind=="AtomBomb" or kind=="HydrogenBomb") and self:readyMissiles()<=0 then why="No Missile Silo ready"
     elseif unavailable then why="Unavailable"
     elseif q and tile and q.canBuild==false then why="Can't target here" end
     local state=if why then "cant" elseif kind~="MIRV" and self:samCovers(tile) then "sam" else "ready"
@@ -604,7 +631,7 @@ function City:paintAim(kind: string,price: number,amount: number,touch: boolean,
     local chip=aim:FindFirstChild("Chip",true)
     if chip then
         local color=CHIP[state];local label=chip:FindFirstChild("Label");local dot=chip:FindFirstChild("Dot");local edge=chip:FindFirstChildOfClass("UIStroke")
-        if label then label.Text=if state=="ready" then (if touch and not tile then "Tap a target" else "Ready") elseif state=="sam" then "SAM covers target" elseif state=="self" then "Hits your land" else why or "";label.TextColor3=color end
+        if label then label.Text=if state=="ready" then (if touch and not tile then "Tap a target" else "Ready") elseif state=="sam" then "SAM Launcher covers target" elseif state=="self" then "Hits your land" else why or "";label.TextColor3=color end
         if dot then dot.BackgroundColor3=color end;if edge then edge.Color=color end;chip.BackgroundColor3=color
     end
     local launch=aim:FindFirstChild("Launch",true)
@@ -641,7 +668,7 @@ function City:refreshBlueprintTip()
         and self.callbacks.canPlay() and (not self.callbacks.canSelectBlueprint or self.callbacks.canSelectBlueprint())
     if not allowed then tip.Visible=false;return end
     local priceLabel,ownedLabel=tip:FindFirstChild("Price",true),tip:FindFirstChild("Owned",true)
-    if kind=="premium" then -- PIVOT D12: an Arsenal wing slot (PremiumBuildPlaceholder fills it)
+    if kind=="premium" then -- PIVOT D12: an Arsenal wing slot / a Premium rail card (PremiumBuildPlaceholder fills it)
         local hook=City.premiumHooks.tip;local item=control:GetAttribute("PFPremiumItem")
         local info=if hook and type(item)=="string" then hook(item) else nil
         if not info then tip.Visible=false;return end
@@ -660,6 +687,15 @@ function City:refreshBlueprintTip()
     priceLabel.Text=self.callbacks.formatNumber(price).." gold"
     priceLabel.TextColor3=City.priceColor(slotState)
     ownedLabel.Text=if slotState=="blocked" then "Unavailable" elseif table.find(Blueprint.Nuclear,kind) then "Choose a target" else tostring(Blueprint.count(self.state,kind)).." owned"
+    end
+    -- PF - 3 variant C: a Premium rail card (right edge) shows its card to its left, its top on the card's, kept on screen
+    if control:GetAttribute("PFRailCard") then
+        local origin=self.ui.AbsolutePosition
+        local left=control.AbsolutePosition.X-origin.X-tip.AbsoluteSize.X-10
+        local top=math.clamp(control.AbsolutePosition.Y-origin.Y,8,math.max(8,self.ui.AbsoluteSize.Y-tip.AbsoluteSize.Y-8))
+        if left<8 then tip.Visible=false;return end
+        tip.Position=UDim2.fromOffset(left,top);tip.Visible=true
+        return
     end
     -- PF013: the tooltip's size is authored (280 wide, AutomaticSize height);
     -- only its slot-anchored position is dynamic.
@@ -789,8 +825,11 @@ end
 function City:paintSlot(card: any,kind: string,selected: boolean)
     local slotState,reason=self:slotState(kind)
     local blocked=slotState=="blocked"
+    local was=card:GetAttribute("HudSlotState")
     card:SetAttribute("HudSlotState",slotState);card:SetAttribute("HudBlocked",blocked);card:SetAttribute("HudSlotReason",reason)
     local cost=card:FindFirstChild("Cost")
+    -- short -> affordable: the price turns white with a 1.1 -> 1 pop, so a new player sees a building unlock
+    if Motion and was=="short" and slotState=="ready" and cost and cost:IsA("GuiObject") then Motion.pop(cost,1.1,.18) end
     if cost and cost:IsA("TextLabel") then
         cost.Text=City.compactPrice(self.callbacks.formatNumber(Blueprint.price(self.state,kind)));cost.TextColor3=City.priceColor(slotState)
     end
@@ -874,6 +913,7 @@ function City:equip(kind: string): boolean
     if self.callbacks.blueprintEquipped then self.callbacks.blueprintEquipped(kind) end
     endPremium(self) -- PIVOT D12: a blueprint ends an armed premium item
     self:refreshBlueprints()
+    if okBuildAnim and self.blueprints[kind] then (BuildAnim :: any).press(self.blueprints[kind],false) end
     return true
 end
 function City:dismissMenu(): boolean self:retireCatalog();return false end
@@ -881,9 +921,16 @@ function City:dispatch(q: any,tile: number,amount: number)
     if q.canUpgrade~=nil and q.canUpgrade~=false then self.callbacks.send("Upgrade",{unitId=q.canUpgrade,amount=amount})
     elseif q.canBuild~=nil and q.canBuild~=false then self.callbacks.send("Build",{unitType=q.type or "City",targetId=tile,
         directionUp=if q.type=="Atom Bomb" or q.type=="Hydrogen Bomb" then self.rocketDirectionUp else nil,
-        amount=if q.type=="Atom Bomb" then amount else nil}) end
+        amount=if q.type=="Atom Bomb" then amount else nil})
+        if okBuildAnim then -- PF - 4: the placed kind's card confirms (+ its cost floats up)
+            local placed=q.type or "City";for k,source in SOURCE_NAMES do if source==placed then placed=k end end
+            local card=self.blueprints[placed]
+            if card and card.Visible then (BuildAnim :: any).confirm(card,false,if type(q.cost)=="number" and q.cost>0 then self.callbacks.formatNumber(q.cost) else nil) end
+        end
+    end
 end
 function City:openRadial(tile: number)
+    pcall(function() require(script.Parent.StatsReport).open("Build") end) -- STATS v3: a UI open
     self.navigationUntil=0;self.selectedItemName=nil;self.radialTile=tile;self.level=0;self.radialKind="City";self.attackSubmenu=false;self:retireCatalog();self.hover=nil;self:applyLevel(false);self:refreshRadial()
 end
 function City:isSubmenu(): boolean return self.level>0 end

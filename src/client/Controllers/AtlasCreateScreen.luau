@@ -15,7 +15,8 @@ local Parts=require(script.Parent.LobbyScreenParts)
 local Screen={};Screen.__index=Screen
 local CAPTION="Opens the lobby. You can still change every setting."
 -- the selected option only (both read as six lines in a phone side card)
-local HINTS={Public="Listed in Join Lobby for players worldwide.",Private="Hidden from Join Lobby. Players join with your invite code."}
+-- UI audit build-out (R5): the Public line said what the word already says; Private keeps the one thing a host needs
+local HINTS={Public="",Private="Friends join with your code."}
 local C={text=Color3.fromHex("#f2f2f2"),muted=Color3.fromHex("#9a9a9a"),error=Color3.fromHex("#ff7a70"),hint=Color3.fromHex("#8c8c8c")}
 -- PF020 G8 Lobby Host+ (PF - 2): the HOST+ SETTINGS card and the max-players cap (12 without the pass, the
 -- server max with it), on nodes authored by tools/atlas/author-pf020-host-plus.luau. Without the pass the
@@ -23,14 +24,18 @@ local C={text=Color3.fromHex("#f2f2f2"),muted=Color3.fromHex("#9a9a9a"),error=Co
 local G={gold=Color3.fromHex("#ddbf76"),goldHi=Color3.fromHex("#ffd77a"),goldFill=Color3.fromHex("#2a2414"),line=Color3.fromHex("#3a3a3a"),
     raised=Color3.fromHex("#262626"),grey=Color3.fromHex("#3a3a3a"),accent=Color3.fromHex("#3678ff"),track=Color3.fromHex("#3a3a3a"),dim=Color3.fromHex("#5a5a5a")}
 local PREVIEW={peaceMinutes=3,spectators=4} -- what a player without the pass sees, greyed (the mockup's example values)
+-- 2026-10-28 (Ashton: "remove lobby host+ and just make it free"): every host has it (Contract.HostPlus.free), so no tag,
+-- no pass, no "Host+" words; the controls are simply live
 local function hostPlus(): boolean
+    if Contract.HostPlus.free then return true end
     local player=Players.LocalPlayer
     return player~=nil and player:GetAttribute("OpenFrontHostPlus")==true
 end
--- The tag: the owner's outline word ("HOST+" / "ACTIVE") or the gold crown tag for everyone else.
+-- The tag: the owner's outline word ("HOST+" / "ACTIVE") or the gold crown tag for everyone else; free: none.
 local function paintTag(tag: Instance?,owned: boolean,ownedText: string)
     if not tag then return end
     local t: any=tag
+    if Contract.HostPlus.free then t.Visible=false;t.Active=false;t.Selectable=false;return end
     t.BackgroundTransparency=if owned then 1 else 0
     local crown=t:FindFirstChild("Crown");if crown then crown.Visible=not owned end
     local label=t:FindFirstChild("Label");if label then label.Text=if owned then ownedText else "Lobby Host+";label.TextColor3=if owned then G.gold else G.goldHi end
@@ -54,22 +59,24 @@ function CreateV2.new(root: Frame,context: any): any
     for _,b in {back,back:FindFirstChild("PFHit")} do if b then listen((b :: any).Activated,function()
         if self.pending and context.facade then context.facade.cancel() end;self.pending=false;if context.back then context.back() end
     end) end end
-    for _,name in {"Public","Private"} do listen(lobby.Visibility[name].Activated,function() if not self.pending then self.visibility=name;self:paint() end end) end
+    -- UI audit R8: the Lobby card's small keys answer on their finger zones too (HitZone; author-pf3-hit-zones)
+    local HitZone=require(script.Parent.HitZone)
+    for _,name in {"Public","Private"} do listen(HitZone.signal(lobby.Visibility[name]),function() if not self.pending then self.visibility=name;self:paint() end end) end
     local function openPass() if context.openPass then context.openPass(Contract.HostPlus.pass) end end
     local function edit(change: (any)->any) if hostPlus() and not self.pending then self.settings=change(self.settings);self:paint() else openPass() end end
     local max=lobby.MaxPlayers.Stepper
-    listen(max.Minus.Activated,function() if not self.pending then self.settings=Model.stepMaxPlayers(self.settings,-1,hostPlus(),Players.MaxPlayers);self:paint() end end)
-    listen(max.Plus.Activated,function() if not self.pending then self.settings=Model.stepMaxPlayers(self.settings,1,hostPlus(),Players.MaxPlayers);self:paint() end end)
+    listen(HitZone.signal(max.Minus),function() if not self.pending then self.settings=Model.stepMaxPlayers(self.settings,-1,hostPlus(),Players.MaxPlayers);self:paint() end end)
+    listen(HitZone.signal(max.Plus),function() if not self.pending then self.settings=Model.stepMaxPlayers(self.settings,1,hostPlus(),Players.MaxPlayers);self:paint() end end)
     listen(lobby.PFHostTag.Activated,function() if not hostPlus() then openPass() end end)
     for _,spec in {{"Peace","peaceMinutes"},{"Spectators","spectators"}} do
         local st=lobby[spec[1]].Stepper
-        listen(st.Minus.Activated,function() edit(function(s) return Model.stepHostPlus(spec[2],s,-1) end) end)
-        listen(st.Plus.Activated,function() edit(function(s) return Model.stepHostPlus(spec[2],s,1) end) end)
+        listen(HitZone.signal(st.Minus),function() edit(function(s) return Model.stepHostPlus(spec[2],s,-1) end) end)
+        listen(HitZone.signal(st.Plus),function() edit(function(s) return Model.stepHostPlus(spec[2],s,1) end) end)
     end
     -- team colours: a tap moves that team to the next palette colour
     for team=1,Contract.HostPlus.teamColorSlots do
         local chip=lobby:FindFirstChild("Team"..team)
-        if chip then listen(chip.Activated,function()
+        if chip then listen(HitZone.signal(chip),function()
             edit(function(s)
                 local ids=Model.teamColorIds(s);local current=ids[team]
                 local index=1;for i,entry in Contract.TeamPalette do if entry.id==current then index=i end end
@@ -84,7 +91,7 @@ function CreateV2.new(root: Frame,context: any): any
     if player then listen(player:GetAttributeChangedSignal("OpenFrontHostPlus"),function()
         if not hostPlus() then self.settings=Model.withoutHostPlus(self.settings) end;self:paint()
     end) end
-    listen(self.key.Activated,function() self:create() end)
+    listen(HitZone.signal(self.key),function() self:create() end)
     self:paint()
     return self
 end
@@ -104,7 +111,7 @@ function CreateV2:paint()
     if self.settings.maxPlayers>limit then self.settings.maxPlayers=limit end
     lobby.MaxPlayers.Stepper.Value.Text=tostring(self.settings.maxPlayers)
     lobby.PFHostTag.Visible=not owned
-    lobby.HostPlusHead.Text=if owned then "HOST+ · ACTIVE" else "HOST+"
+    lobby.HostPlusHead.Text=if Contract.HostPlus.free then "MORE OPTIONS" elseif owned then "HOST+ · ACTIVE" else "HOST+"
     local shown=if owned then self.settings else PREVIEW
     local live=owned and not self.pending
     for _,spec in {{"Peace","peaceMinutes"},{"Spectators","spectators"}} do
@@ -115,15 +122,19 @@ function CreateV2:paint()
     end
     local ids=Model.teamColorIds(self.settings)
     local team=self.settings.gameMode=="Team"
+    -- UI audit build-out (R5): team colours only show in Teams mode (no "apply in Teams mode" note under Free for all)
     for t=1,Contract.HostPlus.teamColorSlots do
         local chip=lobby:FindFirstChild("Team"..t)
         if chip then
             local entry=Contract.teamColor(ids[t])
+            chip.Visible=team
             chip.Swatch.BackgroundColor3=if owned and entry then Color3.fromHex(entry.hex) else V2C.off
             chip.Label.TextColor3=if owned and team then V2C.text else V2C.muted
         end
     end
-    lobby.TeamsHint.Text=if not owned then "Lobby Host+ sets the team colours" elseif team then "Tap a team to change its colour" else "Team colours apply in Teams mode"
+    for _,n in {"TeamsHead","TeamColoursHead","TeamColorsHead","TeamColours"} do local h=lobby:FindFirstChild(n);if h and h:IsA("GuiObject") then h.Visible=team end end
+    lobby.TeamsHint.Visible=team
+    lobby.TeamsHint.Text=if not owned then "Lobby Host+ sets the team colours" else "Tap a team to change its colour"
     local player=Players.LocalPlayer
     lobby.NameBox.PlaceholderText=(if player then player.DisplayName else "Your").."'s lobby"
     lobby.NameBox.TextEditable=not self.pending
@@ -231,8 +242,8 @@ function Screen:paintHostPlus()
     paintTag(self:maxTag(),owned,"HOST+")
     local maxHint=self.lobby:FindFirstChild("PFMaxHint")
     if maxHint then
-        maxHint.Text=if owned then "Up to the server max with Lobby Host+" else Contract.HostPlus.freeMaxPlayers.." is the most without the pass"
-        maxHint.TextColor3=if owned then G.gold else C.hint
+        maxHint.Text=if Contract.HostPlus.free then "Up to the server max" elseif owned then "Up to the server max with Lobby Host+" else Contract.HostPlus.freeMaxPlayers.." is the most without the pass"
+        maxHint.TextColor3=if owned and not Contract.HostPlus.free then G.gold else C.hint
     end
     local card=Parts.find(self.root.Body,"Right").Panels:FindFirstChild("PFHostPlus");if not card then return end
     local stroke=card:FindFirstChildOfClass("UIStroke");if stroke then stroke.Color=if owned then G.gold else G.line end

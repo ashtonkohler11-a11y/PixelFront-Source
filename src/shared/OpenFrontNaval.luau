@@ -107,7 +107,7 @@ function Naval.initExecution(state: any, execution: any, api: any): boolean
             max = GameConfig.forState(state).Naval.MaxShips })
         return false
     end
-    if execution.targetOwner>0 and state.players[owner].playerType~="Bot" and state.players[execution.targetOwner].playerType~="Bot"
+    if not execution.forgive and execution.targetOwner>0 and state.players[owner].playerType~="Bot" and state.players[execution.targetOwner].playerType~="Bot"
         and api and api.rejectIncomingRequest then api.rejectIncomingRequest(owner,execution.targetOwner) end
     if execution.targetOwner == owner then return false end
     if api and api.canAttackPlayer and execution.targetOwner > 0
@@ -187,8 +187,9 @@ function Naval.tickExecution(state: any, execution: any, api: any): boolean
         if execution.targetOwner > 0 and api.friendly and api.friendly(owner, execution.targetOwner) then
             state.troops[owner] += math.floor(ship.troops)
         else
+            -- forgive: the first match's step-4 landing (Simulation.boat); its attack is forgiven like a land one
             table.insert(state.pendingExecutions, { kind = "Attack", owner = owner, targetOwner = execution.targetOwner,
-                amount = ship.troops, sourceTile = execution.dst, removeTroops = false })
+                amount = ship.troops, sourceTile = execution.dst, removeTroops = false, forgive = execution.forgive })
         end
         deleteShip(state, ship)
         state.shipsArrived = state.shipsArrived or {}

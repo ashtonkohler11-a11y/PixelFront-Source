@@ -9,13 +9,16 @@
 local Onboarding = {}
 Onboarding.VERSION = 1
 Onboarding.STORE = "OpenFrontOnboarding_v1"
-Onboarding.WAIT_SECONDS = 45 -- stores + the client's boot; later than this the visit is skipped (the next can run it)
+-- stores, counted from join; later than this the visit is skipped (the next can run it). UX audit #1 (Ashton picked
+-- "Instant start", 2026-10-27): was 45 s; the verdict lands as soon as every source is in, this only caps a slow store,
+-- and the client's boot cover (LobbyController.COVER_GIVE_UP) holds a little longer so the menu never flashes first
+Onboarding.WAIT_SECONDS = 10
 Onboarding.POLL_SECONDS = 0.5
 Onboarding.SPLASH_SECONDS = 2 -- the splash is read before the teleport begins
 Onboarding.RETRY_SECONDS = 6 -- one retry (after the admission's 5 s cooldown), then the player stays in the lobby
 Onboarding.ADMIT_SECONDS = 900 -- a reserved server admits an auto run marked within this window
 Onboarding.READY_SECONDS = 15 -- no boot handshake by then (a missed event): go ahead, the splash is only cosmetic
-Onboarding.INTRO_SECONDS = 45 -- PF043 D9: the intro waits this long for Start, then the tutorial starts anyway (it's mandatory)
+Onboarding.INTRO_SECONDS = 3 -- an older client's intro card (no longer sent): a splash at most, then the tutorial starts anyway
 Onboarding.Text = table.freeze({
     starting = "Starting your first match…",
     retrying = "Still starting your tutorial…",
@@ -130,7 +133,7 @@ function Methods.run(self: any, userId: number, entry: any)
         entry.record = (Onboarding.validate(data))
         entry.recordFailed = entry.record == nil
     else entry.recordFailed = true end
-    local deadline = P.now() + Onboarding.WAIT_SECONDS
+    local deadline = entry.addedAt + Onboarding.WAIT_SECONDS -- from join: the record's retries count toward it
     while true do
         if self.players[userId] ~= entry or self.closing then return end
         local verdict, reason = Onboarding.classify(self:input(userId, entry))

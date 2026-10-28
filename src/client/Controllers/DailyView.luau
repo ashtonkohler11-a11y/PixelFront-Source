@@ -10,6 +10,8 @@ local UserInputService=game:GetService("UserInputService")
 local GuiService=game:GetService("GuiService")
 local Daily=require(script.Parent.DailyClient)
 local RewardDrop=require(script.Parent.RewardDrop) -- PF043 (Ashton: "all of them"): every "you got it" moment plays the reward drop
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- UI lock-in BUILD-OUT (PF - 4): the shared motion
+local Motion: any=if okMotion and type(UiMotion)=="table" and type((UiMotion :: any).tween)=="function" then UiMotion else nil -- (CLI loaders stub unknown modules)
 local View={}
 View.PHONE=540 -- the menu height at or under which the chips use the bottom strip (AtlasQueueDock's pill threshold)
 View.HOLD=.6 -- seconds: a long-press on a running daily rerolls it
@@ -46,10 +48,10 @@ local function bindArt(img: any,id: string?)
 end
 
 -- ------------------------------------------------------------------ a ring (well, track, arc, glyph, done badge)
--- tone: "cobalt" | "gold" (the weekly)
-function View.paintRing(r: any,c: any,tone: string?)
+-- tone: "cobalt" | "gold" (the weekly); k (0..1, default 1): how much of the arc shows (the Daily tab's open sweep)
+function View.paintRing(r: any,c: any,tone: string?,k: number?)
     if not r or type(c)~="table" then return end
-    local f=Daily.fraction(c);local finished=c.state=="done" or c.state=="claimed"
+    local f=Daily.fraction(c)*math.clamp(k or 1,0,1);local finished=c.state=="done" or c.state=="claimed"
     local arc=find(r,"Arc")
     if arc then
         local n=math.clamp(math.floor(f*25+.5),0,25);if f>0 and n==0 then n=1 end
@@ -82,7 +84,7 @@ local function paintChip(b: any,c: any,weekly: boolean)
         setText(find(b,"Progress"),Daily.progressText(c),if claimed then C.dim else C.text)
         setText(find(b,"Reward"),Daily.rewardText(reward),if claimed then C.dimmer else C.ice)
         show(find(b,"ClaimGem"),done);show(find(b,"ClaimAmount"),done);setText(find(b,"ClaimAmount"),cobalt)
-        show(find(b,"ClaimXp"),done and reward.xp~=nil);setText(find(b,"ClaimXp"),if reward.xp then tostring(reward.xp).." XP" else "")
+        show(find(b,"ClaimXp"),false) -- UI lock-in (PF - 4, R17): no XP line (Levels are gone)
     end
     b:SetAttribute("PFDailyState",c.state)
 end
@@ -284,7 +286,7 @@ function View.paintStreak(root: any,s: any)
 end
 
 -- ------------------------------------------------------------------ lobby
-function View.openStreak() end -- set by View.lobby (PF043 F)
+function View.openStreak(_day: number?) end -- set by View.lobby (PF043 F); day: a Day N link opens the sheet with that day lit
 local lobbyBound=false
 function View.lobby(gui: Instance)
     if lobbyBound then return end
@@ -324,12 +326,22 @@ function View.lobby(gui: Instance)
     end
     local autoShown: {[any]: boolean}={}
     local autoToken=0
+    -- UX audit #3 (MM 2026-10-27; bounce): the sheet never opens on its own on a join or after the tutorial; it opens on the
+    -- way back from a real match (the hub teleport's data: returnNonce + fromKind, not "tutorial"; not when the player goes
+    -- straight on to a requeued match). The dot and the Shop's Free rewards row stay the ways in.
+    local arrivedFromMatch=(function(): boolean
+        local ok,data=pcall(function() return game:GetService("TeleportService"):GetLocalPlayerTeleportData() end)
+        if not ok or type(data)~="table" or data.returnNonce==nil or data.requeueRoom~=nil then return false end
+        return type(data.fromKind)=="string" and data.fromKind~="tutorial"
+    end)()
+    View.autoOnArrival=arrivedFromMatch -- tests / the stage
     local paint: ()->()
     -- PIVOT D14 (Ashton 2026-10-23: "make sure that daily rewards shows up upon join, not starter pack"; this reverses PF043 F):
     -- while the streak is claimable the sheet opens on its own once per day, AUTO_DELAY after the menu settles; × or a claim
     -- dismisses it for the day. The Shop's Free rewards row stays a second way in.
     local function scheduleAuto()
         local s=Daily.get()
+        if not arrivedFromMatch then return end
         if not popup or popup.Visible or type(s)~="table" or not Daily.streakClaimable(s) or dismissed[s.day] or autoShown[s.day] then return end
         autoToken+=1;local mine=autoToken
         task.delay(View.AUTO_DELAY,function()
@@ -381,13 +393,33 @@ function View.lobby(gui: Instance)
         local t=UserInputService:GetLastInputType()
         return t==Enum.UserInputType.Gamepad1 or t==Enum.UserInputType.Gamepad2 or t==Enum.UserInputType.Gamepad3 or t==Enum.UserInputType.Gamepad4
     end
-    View.openStreak=function()
+    View.openStreak=function(day: number?)
         if not popup or blocked() then return end
         local s=Daily.get();if type(s)~="table" then return end
+        local was=popup.Visible
         View.paintStreak(popup,s);popup.Visible=true
         if padLast() then local k=claimKey();if k then GuiService.SelectedObject=k end end
         focusRings()
         paint()
+        -- UI lock-in BUILD-OUT (PF - 4): the card pops in .94 -> 1 (.2 s Back) over its dim's fade, and the road's lit leg sweeps
+        -- out to today (.4 s); a Day N link (the Icicle card's "Day 4") lights that day's tile: a pop + a gold rim for 2.4 s
+        if Motion and not was then
+            local card=modalCard or panel
+            if card then Motion.open(card,{scrim=find(popup,"Dim")}) end
+            local week=find(modalCard,"Week");local lit=find(week,"Lit")
+            if lit and lit.Visible then local goal=lit.Size.X.Scale;lit.Size=UDim2.fromScale(0,lit.Size.Y.Scale);Motion.fill(lit,goal) end
+            local tile=day and find(week,"Day"..tostring(day))
+            if tile then
+                task.delay(.15,function() if popup.Visible then Motion.pop(tile,1.15,.3) end end)
+                local tr=find(tile,"TileRim")
+                if tr and tr:IsA("UIStroke") then
+                    local color,thick=tr.Color,tr.Thickness
+                    tr.Color=C.goldHi;tr.Thickness=2.5
+                    local stop=Motion.glow(tr,{lo=0,hi=.5,period=1.2})
+                    task.delay(2.4,function() stop();if tr.Parent then tr.Color=color;tr.Thickness=thick end end)
+                end
+            end
+        end
     end    local function close()
         local s=Daily.get();if type(s)=="table" then dismissed[s.day]=true end
         if popup then popup.Visible=false end
@@ -560,7 +592,8 @@ function View.endCard(result: any,matchId: () -> any)
             local cobalt,xp,n=claimTotal(s)
             show(find(phone,"Key"),n>0);show(find(phone,"Gem"),n>0)
             local done=0;for _,c in s.daily do if c.state~="run" then done+=1 end end
-            setText(find(phone,"Reward"),if n>0 then tostring(cobalt)..(if xp>0 then " · "..xp.." XP" else "") else done.." / 3 today",if n>0 then C.ice else C.dim)
+            local _=xp -- UI lock-in (PF - 4, R17): the Cobalt alone (Levels are gone)
+            setText(find(phone,"Reward"),if n>0 then tostring(cobalt) else done.." / 3 today",if n>0 then C.ice else C.dim)
         end
     end
     Daily.changed(paint)

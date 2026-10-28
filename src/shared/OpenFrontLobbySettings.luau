@@ -45,12 +45,13 @@ function Lobby.nationsSlider(value: number|string,defaultCount: number): number
     return value :: number
 end
 function Lobby.compactBots(value: number,compact: boolean): number
-    if compact and value==400 then return 100 end
-    if not compact and value==100 then return 400 end
+    -- Compact: 125 tribes (Ashton 2026-10-27, x2.5; was 100, capped at 50 by Availability)
+    if compact and value==400 then return 125 end
+    if not compact and value==125 then return 400 end
     return value
 end
 function Lobby.compactNations(value: number,defaultCount: number,compact: boolean): number
-    local compactCount=math.max(0,math.floor(defaultCount*.25))
+    local compactCount=math.max(0,math.floor(defaultCount*Availability.NationShare)) -- (2026-10-26: doubled, was .25)
     if compact and value==defaultCount then return compactCount end
     if not compact and value==compactCount then return defaultCount end
     return value
@@ -131,6 +132,10 @@ function Lobby.parseInput(key: string,text: string): number?
     end
     return nil
 end
+Lobby.KnownKeys=table.freeze({gameMap=true,gameMapSize=true,gameType=true,gameMode=true,playerTeams=true,difficulty=true,bots=true,nations=true,
+    infiniteGold=true,infiniteTroops=true,instantBuild=true,randomSpawn=true,disabledUnits=true,donateGold=true,donateTroops=true,
+    maxTimerValue=true,goldMultiplier=true,startingGold=true,customAllianceDuration=true,waterNukes=true,disableNavMesh=true,doomsdayClock=true,overtime=true,
+    disabledPremium=true})
 function Lobby.validateConfig(config: any,mapTypes: {[string]: boolean}?): boolean
     if type(config)~="table" then return false end
     if type(config.gameMap)~="string" or (mapTypes and not mapTypes[config.gameMap]) then return false end
@@ -174,12 +179,16 @@ function Lobby.validateConfig(config: any,mapTypes: {[string]: boolean}?): boole
         local value=config.overtime
         if type(value)~="table" or value.enabled~=true or not bounded(value.startMinutes,1,120,true) then return false end
     end
-    local known={gameMap=true,gameMapSize=true,gameType=true,gameMode=true,playerTeams=true,difficulty=true,bots=true,nations=true,
-        infiniteGold=true,infiniteTroops=true,instantBuild=true,randomSpawn=true,disabledUnits=true,donateGold=true,donateTroops=true,
-        maxTimerValue=true,goldMultiplier=true,startingGold=true,customAllianceDuration=true,waterNukes=true,disableNavMesh=true,doomsdayClock=true,overtime=true,
-        disabledPremium=true}
-    for key in config do if not known[key] then return false end end
+    for key in config do if not Lobby.KnownKeys[key] then return false end end
     return true
+end
+-- A running match's config carries more than its settings (SoloDifficulty's mercy, the first match's gold edge); Play
+-- again sends only the settings back (MM 2026-10-27: validateConfig refuses the rest).
+function Lobby.settingsOnly(config: any): any?
+    if type(config)~="table" then return nil end
+    local out={}
+    for key,value in config do if Lobby.KnownKeys[key] then out[key]=if type(value)=="table" then table.clone(value) else value end end
+    return out
 end
 Lobby.UnitOptions=units
 Lobby.PremiumOptions=premiumIds -- the premium item bans' ids (ArsenalCatalog shelf order)

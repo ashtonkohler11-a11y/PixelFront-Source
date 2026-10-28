@@ -7,13 +7,15 @@
 local Daily = {}
 Daily.VERSION = 1
 Daily.REWARD = table.freeze({daily = {cobalt = 25}, bonus = {cobalt = 100}, weekly = {cobalt = 300}}) -- Levels removed 2026-10-26: no daily XP
--- the streak's seven tiles (Ashton 2026-10-25, daily variant B): day 2 = Artillery and day 7 = Warden (was the Longshot until the
+-- the streak's seven tiles (Ashton 2026-10-25, daily variant B; day 2 was Artillery until 2026-10-28): day 7 = Warden (was the Longshot until the
 -- premium reshuffle; a Longshot owner owns the Warden, so gets the Cobalt) (Arsenal unlocks,
 -- CosmeticService.grantArsenal), day 4 = the Glacier pack (its cosmetic items), the rest a Cobalt climb (PF - 2). On an item
 -- day `cobalt` is what an owner gets instead (flat, Ashton approved: ~2 / ~3 / ~5 matches of pay) and what VIP's "2x" adds.
 -- Cobalt days (Ashton 2026-10-25): 500 / 750 / 1,000 / 1,500. The Glacier pack's items are PF - 1's reserved ids; until they
 -- are in CosmeticCatalog, DailyService grants only the catalogued ones and the tile pays its Cobalt.
-Daily.STREAK = table.freeze({{cobalt = 500}, table.freeze({arsenal = "artillery", cobalt = 1000}), {cobalt = 750},
+-- UI audit build-out (approved card PF-3.shop.daily.0, 2026-10-28): day 2 is a Cobalt day, 600 (between day 1's 500 and
+-- day 3's 750). It gave the Artillery free, half of the R$ 39 Starter Pack; an Artillery already granted stays owned.
+Daily.STREAK = table.freeze({{cobalt = 500}, {cobalt = 600}, {cobalt = 750},
     table.freeze({pack = "glacier", items = table.freeze({"skin_glacier", "buildings_glacier", "vfx_frostbloom", "nameplate_icicle", "flag_snowcrest"}), cobalt = 1500}),
     {cobalt = 1000}, {cobalt = 1500}, table.freeze({arsenal = "warden", cobalt = 2500})})
 -- the pools: kind -> the goals one can draw (ids are kind_goal, e.g. tiles_2000)

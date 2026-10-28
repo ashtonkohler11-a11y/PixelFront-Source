@@ -176,6 +176,8 @@ function Parties:renew(id:string,locals:any):(any?,string?)
                 seat.leaseUntil=now+(if state=="away"then Limits.partyAway else Limits.partyLease)
                 if seat.state~=state then seat.state=state;changed=true end
                 if type(info)=="table"and type(info.level)=="number"and info.level~=seat.level then seat.level=info.level;changed=true end
+                -- the hub server this seat renews from (a member coming home from a match follows it; no version bump)
+                if type(info)=="table"and type(info.hub)=="string"and #info.hub<=64 then seat.hub=info.hub end
             end
         end
         local before=size(old);local leader=old.leader
@@ -183,6 +185,22 @@ function Parties:renew(id:string,locals:any):(any?,string?)
         if changed or size(old)~=before or old.leader~=leader then old.version+=1 end
         return old
     end)
+end
+
+-- MM 2026-10-27 (parties split on the way home): the hub to send a member returning from a match to, the hub where
+-- the party already sits (the leader's first, then any live seat that renewed from a hub recently), never `except`
+-- (the caller's own server). nil: no live hub, Roblox picks one.
+function Parties.homeHub(p:any,userId:number,now:number,except:string?):string?
+    local best,bestScore=nil,-math.huge
+    for uid,seat in p.members do
+        local hub=seat.hub
+        local fresh=seat.state~="away"and seat.leaseUntil-now>Limits.partyLease-3*Limits.renewSeconds
+        if uid~=tostring(userId)and type(hub)=="string"and hub~=except and fresh then
+            local score=(if seat.userId==p.leader then 1e9 else 0)+seat.leaseUntil
+            if score>bestScore then best,bestScore=hub,score end
+        end
+    end
+    return best
 end
 
 -- The leader's queue: the public room every free member was seated in (nil: none).

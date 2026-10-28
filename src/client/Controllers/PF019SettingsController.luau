@@ -18,6 +18,9 @@ local Accent=require(Shared.PixelFrontAccent)
 local Spec=require(Shared.PixelFrontSettingsSpec)
 local InputPrompts=require(script.Parent.InputPrompts)
 local Sfx=require(script.Parent.Sfx) -- PF043 H
+local HitZone=require(script.Parent.HitZone) -- UI audit R8: the small keys' finger zones (author-pf3-hit-zones)
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- build-out motion (PF - 4's shared module)
+local Motion: any=if okMotion and type(UiMotion)=="table" then UiMotion else nil
 local Controller={};local Methods={};Methods.__index=Methods
 local C={text=Color3.fromHex("#f2f2f2"),muted=Color3.fromHex("#bdbdbd"),hint=Color3.fromHex("#8c8c8c"),track=Color3.fromHex("#3a3a3a"),
     border=Color3.fromHex("#535353"),raised=Color3.fromHex("#292929"),gold=Color3.fromHex("#ddbf76"),orange=Color3.fromHex("#f59e0b"),
@@ -49,16 +52,21 @@ function Controller.creditsText(identity: any): {[string]: string}
         Based=name.." is a modified version of OpenFront. © OpenFront Inc. and Contributors. Changes © "..tostring(identity.year).." "..tostring(identity.studio)..".",
         Assets="Maps, icons and some sprites from OpenFront, licensed under CC BY-SA 4.0.",
         Independent=name.." is not affiliated with or endorsed by OpenFront.",
-    }
+        Source=if type(identity.sourceUrl)=="string" and identity.sourceUrl~="" then identity.sourceUrl else nil,
+    } :: any
 end
 function Controller.fillCredits(page: Instance?)
     if not page then return end
     local ok,Identity=pcall(function() return require(game:GetService("ReplicatedStorage").Shared.GameIdentity) end)
     if not ok then return end
-    for key,words in Controller.creditsText(Identity) do
+    local words=Controller.creditsText(Identity)
+    for key,text in words do
         local label=page:FindFirstChild(key.."Body",true)
-        if label and label:IsA("TextLabel") then label.Text=words end
+        if label and (label:IsA("TextLabel") or label:IsA("TextBox")) then label.Text=text end
     end
+    -- the Source card (its own card under the three rows, like the kit's Card1/Card2) shows only once there is a repo
+    local source=page:FindFirstChild("SourceCard")
+    if source and source:IsA("GuiObject") then source.Visible=words.Source~=nil end
 end
 function Controller.new(gui: ScreenGui,callbacks: any,session: any): any
     local root=gui:WaitForChild("Background");local ui=root:WaitForChild("UserSettings")
@@ -71,7 +79,7 @@ function Controller.new(gui: ScreenGui,callbacks: any,session: any): any
     for _,name in Spec.tabs do local tab=header.Tabs:FindFirstChild(name);if tab then listen(self,tab.Activated,function()self:setTab(name)end) end end
     listen(self,header.Close.Activated,function()self:closeSettings()end)
     listen(self,ui.Backdrop.Activated,function()self:closeSettings()end)
-    listen(self,header.Reset.Activated,function()self:askReset(self.activeTab)end)
+    listen(self,HitZone.signal(header.Reset),function()self:askReset(self.activeTab)end)
     Controller.fillCredits(self.pages:FindFirstChild("Credits"))
     -- Rows: every authored row carries PFSetting/PFKind/PFSource.
     for _,node in self.pages:GetDescendants() do
@@ -159,26 +167,28 @@ end
 function Methods:format(row: Instance,value: number): string
     local _,_,_,decimals=self:limits(row)
     if row:GetAttribute("PFDisplay")=="multiplier" then return string.format("%.1f×",value/100) end
+    -- UI audit build-out (R21): Name size read "0.40×", a raw multiplier; it shows as a percentage of the default
+    if row:GetAttribute("PFSetting")=="name-scale-slider" or row.Name=="Row_name-scale-slider" then return tostring(math.floor(value*100+.5)).."%" end
     local unit=row:GetAttribute("PFUnit") or ""
     return (if decimals>0 then string.format("%."..decimals.."f",value) else tostring(math.floor(value+.5)))..unit
 end
 function Methods:bindSettingRow(row: Frame)
     local kind=row:GetAttribute("PFKind")
     -- PF043 H: toggles sound on / off; an audio slider's Mute (tools/atlas/author-pf043-audio-mute.luau) mutes its channel
-    if kind=="toggle" then listen(self,row.Toggle.Activated,function()
+    if kind=="toggle" then listen(self,HitZone.signal(row.Toggle),function()
         local on=not self:read(row);self:write(row,on);Sfx.play(if on then "u_on" else "u_off")
     end)
     elseif kind=="choice" then
         for _,option in row.Segments:GetChildren() do
-            if option:IsA("GuiButton") then listen(self,option.Activated,function()self:write(row,option:GetAttribute("PFValue"))end) end
+            if option:IsA("GuiButton") then listen(self,HitZone.signal(option),function()self:write(row,option:GetAttribute("PFValue"))end) end
         end
     elseif kind=="slider" then
-        listen(self,row.Track.InputBegan,function(input)
+        listen(self,HitZone.began(row.Track),function(input)
             if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then self:beginSliderDrag(row,input) end
         end)
         local mute=row:FindFirstChild("Mute")
         if mute and mute:IsA("GuiButton") and row:GetAttribute("PFSource")=="audio" and self.settings.setAudioMuted then
-            listen(self,mute.Activated,function()
+            listen(self,HitZone.signal(mute),function()
                 local id=row:GetAttribute("PFSetting") :: string
                 local muted=not self.settings:audioMuted(id)
                 self.settings:setAudioMuted(id,muted);Sfx.play(if muted then "u_off" else "u_on");self:refresh()
@@ -186,7 +196,7 @@ function Methods:bindSettingRow(row: Frame)
         end
     elseif kind=="swatches" then
         for _,swatch in row.Swatches:GetChildren() do
-            if swatch:IsA("GuiButton") then listen(self,swatch.Activated,function()self:write(row,swatch:GetAttribute("PFValue"))end) end
+            if swatch:IsA("GuiButton") then listen(self,HitZone.signal(swatch),function()self:write(row,swatch:GetAttribute("PFValue"))end) end
         end
     elseif kind=="device" then
         for _,option in row.Segments:GetChildren() do
@@ -391,7 +401,9 @@ end
 function Methods:openSettings(onReturn: any)
     self.onReturn=onReturn;if onReturn then self:setTab("Gameplay") end
     if not self.ui.Visible and self.atlasHost==nil then Sfx.play("u_open") end -- PF043 H (the lobby tab has its own tab sound)
+    local opening=not self.ui.Visible
     self.focusReturn=Gui.SelectedObject;self.ui.Visible=true;self:refresh()
+    if opening and Motion and self.body then Motion.open(self.body,{from=.97}) end -- build-out motion (settings.sheet)
     if self:isGamepad() then Gui.SelectedObject=self.header.Tabs[self.activeTab] end
 end
 -- PF020 G3 (PF - 3, per PF - 1): open Settings on a given tab (the Shop's Custom Flag card opens Premium).
@@ -468,9 +480,16 @@ function Methods:previewAudio(_category: string) end
 function Methods:setPersistenceStatus(message: string) self.body.Status.Text=message end
 function Methods:setAudioControls(audio: any) self.audio=audio end
 function Methods:message(value: string)
-    self.body.Status.Text=value
+    local status=self.body.Status
+    status.Text=value
+    -- build-out motion (settings.status): fades in .12 s, out .3 s
+    if Motion then status.TextTransparency=1;Motion.tween(status,{TextTransparency=0},.12) end
     self.toastSerial=(self.toastSerial or 0)+1;local serial=self.toastSerial
-    task.delay(3,function()if not self.destroyed and serial==self.toastSerial then self.body.Status.Text="" end end)
+    task.delay(3,function()
+        if self.destroyed or serial~=self.toastSerial then return end
+        if Motion then Motion.tween(status,{TextTransparency=1},.3);task.delay(.3,function() if serial==self.toastSerial then status.Text="";status.TextTransparency=0 end end)
+        else status.Text="" end
+    end)
 end
 
 -- ---------------------------------------------------------------- refresh (content only)
@@ -487,7 +506,16 @@ function Methods:refreshRow(entry: any)
     local accent=Accent.color(self.settings,"accent")
     if kind=="toggle" then
         local on=self:read(row)==true
-        row.Toggle.BackgroundColor3=if on then accent else C.track
+        -- UI audit build-out (R21): without VIP, Gold lobbies reads off (it only shines a VIP's rooms)
+        local gated=row:GetAttribute("PFSetting")=="goldLobbies" and game:GetService("Players").LocalPlayer:GetAttribute("OpenFrontVIP")~=true
+        if gated then on=false end
+        -- build-out motion (settings.toggles): a flipped switch fades its track (.15 s) and its knob lands with a 1.1 pop
+        local flipped=row.Toggle:GetAttribute("PFOn")~=nil and row.Toggle:GetAttribute("PFOn")~=on
+        row.Toggle:SetAttribute("PFOn",on)
+        if Motion and flipped then
+            Motion.tween(row.Toggle,{BackgroundColor3=if on then accent else C.track},.15)
+            task.delay(.12,function() Motion.pop(row.Toggle.Knob,1.1,.12) end)
+        else row.Toggle.BackgroundColor3=if on then accent else C.track end
         -- PF044 r5: the knob's spots as shares of the track (its own margin each side), so it holds at any scale
         local track,knob=row.Toggle,row.Toggle.Knob;local w=track.AbsoluteSize.X
         local margin=(track.AbsoluteSize.Y-knob.AbsoluteSize.Y)/2
@@ -521,7 +549,9 @@ function Methods:refreshRow(entry: any)
         if mute and row:GetAttribute("PFSource")=="audio" and self.settings.audioMuted then
             local muted=self.settings:audioMuted(row:GetAttribute("PFSetting") :: string)
             local on,off=mute:FindFirstChild("On"),mute:FindFirstChild("Off")
-            if on then on.Visible=not muted end;if off then off.Visible=muted end
+            -- UI audit build-out (R21): at 0% the speaker shows its slash too (silent either way); the value still reads 0%
+            local silent=muted or value<=minimum
+            if on then on.Visible=not silent end;if off then off.Visible=silent end
             row.Track.Fill.BackgroundTransparency=if muted then .65 else 0
             if muted then row.Value.Text="Muted" end
         end

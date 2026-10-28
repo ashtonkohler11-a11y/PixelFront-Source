@@ -9,7 +9,10 @@
 local Daily=require(script.Parent.DailyClient)
 local View=require(script.Parent.DailyView)
 local RewardDrop=require(script.Parent.RewardDrop)
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- UI lock-in BUILD-OUT (PF - 4)
+local Motion: any=if okMotion and type(UiMotion)=="table" and type((UiMotion :: any).tween)=="function" then UiMotion else nil -- (CLI loaders stub unknown modules)
 local Page={};Page.__index=Page
+Page.SWEEP,Page.SWEEP_STEP=.5,.06 -- BUILD-OUT: on open the rings sweep from empty to their value (.5 s Cubic Out, 60 ms a row)
 Page.HOLD=.6 -- seconds: a long-press on a running daily rerolls it (as the Play chips did)
 local hex=Color3.fromHex
 local C={text=hex("#f2f2f2"),muted=hex("#9a9a9a"),green=hex("#5fd38a"),ice=hex("#9fc0ff"),dim=hex("#6d717a"),pip=hex("#4a4a4a"),gold=hex("#f1cf7f")}
@@ -50,7 +53,12 @@ function Page.new(root: Frame,context: any): any
     local today,weekly=find(root,"Today"),find(root,"Weekly")
     local self: any=setmetatable({root=root,context=context or {},connections={},visible=false,destroyed=false,asked={},
         today=today,weekly=weekly,bonus=find(today,"AllThree"),streak=find(root,"Streak"),dot=(context or {}).dot},Page)
-    local function listen(signal: RBXScriptSignal,fn: any) table.insert(self.connections,signal:Connect(fn)) end
+    local function listen(signal: any,fn: any) table.insert(self.connections,signal:Connect(fn)) end
+    -- UI audit R8 (PF - 3's HitZone pattern, author-pf4-hit-zones): a Claim's invisible finger-zone strips fire it too
+    local okZone,HitZone=pcall(function() return require(script.Parent.HitZone) end)
+    local function tapped(key: any): any
+        return if okZone and type(HitZone)=="table" and type((HitZone :: any).signal)=="function" then (HitZone :: any).signal(key) else key.Activated
+    end
     -- claims: the piece the button stands for, asked once; the drop plays on the server's grant
     local function claim(target: string,id: any?)
         local key=target.."|"..tostring(id)
@@ -61,7 +69,7 @@ function Page.new(root: Frame,context: any): any
         local row=find(today,"Row"..i)
         local function piece(): any local s=Daily.get();return type(s)=="table" and type(s.daily)=="table" and s.daily[i] or nil end
         local key=find(row,"Claim")
-        if key then listen(key.Activated,function() local c=piece();if c and c.state=="done" then claim("daily",c.id) end end) end
+        if key then listen(tapped(key),function() local c=piece();if c and c.state=="done" then claim("daily",c.id) end end) end
         -- a long-press on a running daily rerolls it (one reroll a day; the server checks)
         if row and row:IsA("GuiButton") then
             local held=0
@@ -79,9 +87,9 @@ function Page.new(root: Frame,context: any): any
         end
     end
     local bonusKey=find(self.bonus,"Claim")
-    if bonusKey then listen(bonusKey.Activated,function() local s=Daily.get();if type(s)=="table" and type(s.bonus)=="table" and s.bonus.state=="done" then claim("bonus") end end) end
+    if bonusKey then listen(tapped(bonusKey),function() local s=Daily.get();if type(s)=="table" and type(s.bonus)=="table" and s.bonus.state=="done" then claim("bonus") end end) end
     local weeklyKey=find(weekly,"Claim")
-    if weeklyKey then listen(weeklyKey.Activated,function() local s=Daily.get();local w=type(s)=="table" and s.weekly;if type(w)=="table" and w.state=="done" then claim("weekly",w.id) end end) end
+    if weeklyKey then listen(tapped(weeklyKey),function() local s=Daily.get();local w=type(s)=="table" and s.weekly;if type(w)=="table" and w.state=="done" then claim("weekly",w.id) end end) end
     if self.streak and self.streak:IsA("GuiButton") then
         listen(self.streak.Activated,function()
             if self.context.openStreak then self.context.openStreak() else View.openStreak() end
@@ -97,9 +105,20 @@ function Page.new(root: Frame,context: any): any
         local e=RewardDrop.entry(result.granted,label);local drop=self.context.gui and RewardDrop.get(self.context.gui)
         if e and drop then drop:play({e}) end
     end)} :: any)
+    -- BUILD-OUT: every gold Claim breathes 1 <-> 1.03 (2.4 s, from its centre) while it shows, with its sheen band's sweep every
+    -- 4.5 s (the streak road's Claim language; the band: author-pf4-daily-sheen). The loops run only while the key is visible.
+    if Motion then
+        for _,key in {find(find(today,"Row1"),"Claim"),find(find(today,"Row2"),"Claim"),find(find(today,"Row3"),"Claim"),bonusKey,weeklyKey} do
+            if not key then continue end
+            Motion.breathe(key,{period=2.4,amp=.03})
+            local band=key:FindFirstChild("PFSheen");local g=band and band:FindFirstChildOfClass("UIGradient")
+            if g then Motion.sheen(g,{period=4.5,sweep=1.1}) end
+        end
+    end
     -- the reset line ticks while the page shows
     listen(game:GetService("RunService").Heartbeat,function()
         if not self.visible or self.destroyed then return end
+        if self.sweepAt then self:sweep() end
         local now=os.clock();if now-(self.ticked or 0)<1 then return end
         self.ticked=now
         setText(find(today,"Resets"),Daily.resetText(Daily.get()))
@@ -123,14 +142,37 @@ function Page:paint()
         setText(find(self.streak,"Label"),"Login streak · Day "..tostring(streak and streak.today or 1))
         show(find(self.streak,"Dot"),Daily.streakClaimable(s))
     end
-    -- the nav tab's gold dot: a finished challenge (or the bonus / weekly) waits
-    if self.dot then self.dot.Visible=Daily.claimable(s) end
+    -- the nav tab's gold dot: a finished challenge (or the bonus / weekly) waits; BUILD-OUT: it pops in (0 -> 1, .2 s Back), no loop
+    if self.dot then
+        local on=Daily.claimable(s)
+        if on and not self.dot.Visible and Motion then Motion.open(self.dot,{from=.01}) else self.dot.Visible=on end
+    end
+    if self.sweepAt then self:sweep() end
+end
+-- the open sweep: each ring's arc grows from empty to its value, a row 60 ms after the one above
+function Page:sweep()
+    local s=Daily.get()
+    local t=os.clock()-(self.sweepAt or 0)
+    local daily=type(s)=="table" and type(s.daily)=="table" and s.daily or {}
+    local rings={{find(find(self.today,"Row1"),"Ring"),daily[1],"cobalt"},{find(find(self.today,"Row2"),"Ring"),daily[2],"cobalt"},
+        {find(find(self.today,"Row3"),"Ring"),daily[3],"cobalt"},{find(self.weekly,"Ring"),type(s)=="table" and s.weekly or nil,"gold"}}
+    local done=true
+    for i,r in rings do
+        local u=math.clamp((t-(i-1)*Page.SWEEP_STEP)/Page.SWEEP,0,1)
+        if u<1 then done=false end
+        View.paintRing(r[1],r[2],r[3],1-(1-u)^3)
+    end
+    if done then self.sweepAt=nil end
 end
 
 function Page:setVisible(visible: boolean)
     if self.destroyed then return end
+    local opening=visible and not self.visible
     self.visible=visible
-    if visible then Daily.refresh();self:paint() end
+    if visible then
+        if opening and Motion and not Motion.reduced(self.root) then self.sweepAt=os.clock() end
+        Daily.refresh();self:paint()
+    end
 end
 
 function Page:focusActive()

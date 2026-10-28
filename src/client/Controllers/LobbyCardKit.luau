@@ -203,6 +203,10 @@ function Handle:_apply(instant: boolean?)
     -- the ring's own colour is the live accent (the accent system recolours it), except while the
     -- kit has painted it gold for a selection
     if ring and not self.ringGold then self.style.accent=ring.Color end
+    -- PFCardNoLift (a card in a UiMotion paired hover, R4): it grows or gives way from its centre instead, so the hover
+    -- neither lifts it nor deepens its shadow (rest drop 4; a press still settles to 2)
+    local still=self.card:GetAttribute("PFCardNoLift")==true
+    if still then self.style.lift=0 end
     local look=Math.look(self.state,self.style)
     local reduced=instant==true or self.kit:reduced()
     local base,scaleTime,ease=Math.timing(self.wasPressed,self.state.pressed==true,reduced)
@@ -220,7 +224,7 @@ function Handle:_apply(instant: boolean?)
     set(self.stroke,{Color=look.stroke,Thickness=look.thickness})
     set(self.scale,{Scale=look.scale},scaleInfo)
     set(self.glow,{ImageTransparency=look.glow,ImageColor3=look.glowColor})
-    if self.shadow then set(self.shadow,{ImageTransparency=look.shadow,Position=self.shadowBase+UDim2.fromOffset(0,look.drop)}) end
+    if self.shadow then set(self.shadow,{ImageTransparency=look.shadow,Position=self.shadowBase+UDim2.fromOffset(0,if still then math.min(look.drop,4) else look.drop)}) end
     if ring then
         local gold=look.ringRole=="selected"
         if gold~=(self.ringGold==true) then

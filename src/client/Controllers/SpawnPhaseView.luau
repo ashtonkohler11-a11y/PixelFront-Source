@@ -28,6 +28,16 @@ local GameConfig=require(game:GetService("ReplicatedStorage"):WaitForChild("Shar
 local BeginVoteView=require(script.Parent:WaitForChild("BeginVoteView")) -- PF044: the vote to begin waits before the pick
 local View={};View.__index=View
 local hex=Color3.fromHex
+-- UI audit build-out 2026-10-28: the shared motion kit (PF - 4's UiMotion); nil where it can't load (test fakes)
+local Motion: any=(function() local ok,mod=pcall(function() return require(script.Parent.UiMotion) end);return if ok and type(mod)=="table" and type(mod.tween)=="function" then mod else nil end)()
+-- the countdown's last 3 s tick the ring once a second; GO pops 1.3 -> 1 (one beat per new value)
+local function beat(node: any,go: boolean,secs: number?)
+    if not Motion or not node then return end
+    local key=if go then "GO" elseif secs and secs<=3 then tostring(math.ceil(secs)) else nil
+    if key==nil or node:GetAttribute("PFBeat")==key then return end
+    node:SetAttribute("PFBeat",key)
+    if go then Motion.pop(node,1.3,.2) else Motion.tick(node,1.12,.3) end
+end
 local WHITE,AMBER,GREEN,RED=hex("#ffffff"),hex("#ffae48"),hex("#7ee08a"),hex("#ef5350")
 local GOLD=Color3.new(1,.84,0) -- OpenFront's teamless self ring (WebGLFrameBuilder.syncSpawnOverlay)
 local TICKS_PER_SECOND=10
@@ -139,11 +149,13 @@ function View:updateGuide(state: any,o: any,guide: any)
         local ring=pick.Ring;strokes(ring)
         setRing(ring,if go or secs==nil then 1 else math.clamp(secs/full,0,1),color)
         ring.Number.Text=if go then "GO" elseif secs then clockText(secs) else "";ring.Number.TextColor3=color
+        beat(ring,go,secs)
         pick.Medal.Ring.Color=if go then GREEN else hex("#ffd36a")
         self.pulseRing=nil
         return
     end
     head.Time.Text=if go then "GO" elseif secs then clockText(secs) else ""
+    beat(head.Time,go,secs)
     head.Time.TextColor3=color;head.Bar.Fill.BackgroundColor3=color
     head.Bar.Fill.Size=UDim2.fromScale(if go or secs==nil then 1 else math.clamp(secs/full,0,1),1)
     self.pulseRing=nil
@@ -396,6 +408,22 @@ function View:draw(zoom: number,hoverTile: number?)
     local w=state.map.width
     local colors=self.callbacks.colors and self.callbacks.colors() or {}
     local seen={}
+    -- UI audit build-out 2026-10-28: a pin under the pick card or the icon bar hides (it peeked out from under them)
+    local covers={}
+    local screen=self.gameUI and self.gameUI.AbsoluteSize or Vector2.zero
+    local guide=self.root:FindFirstChild("Guide")
+    for _,c in (if guide then guide:GetChildren() else {}) do
+        if c:IsA("GuiObject") and c.Visible and c.AbsoluteSize.X<screen.X*.6 then table.insert(covers,c) end
+    end
+    local bar=self.gameUI and self.gameUI:FindFirstChild("PFIconBar");if bar and bar:IsA("GuiObject") and bar.Visible then table.insert(covers,bar) end
+    local function covered(pin: any): boolean
+        local p,s=pin.AbsolutePosition,pin.AbsoluteSize
+        for _,c in covers do
+            local q,z=c.AbsolutePosition,c.AbsoluteSize
+            if p.X<q.X+z.X and p.X+s.X>q.X and p.Y<q.Y+z.Y and p.Y+s.Y>q.Y then return true end
+        end
+        return false
+    end
     for owner,player in state.players do
         if owner==1 or type(player)~="table" or not player.spawnTile or player.playerType=="Bot" then continue end
         seen[owner]=true
@@ -408,6 +436,7 @@ function View:draw(zoom: number,hoverTile: number?)
         pin.Head.BackgroundColor3=color;pin.Point.BackgroundColor3=color
         local s=player.spawnTile-1
         pin.Position=UDim2.fromOffset((s%w+.5)*zoom,(s//w+.5)*zoom)
+        pin.Visible=not covered(pin)
     end
     for owner,pin in self.pins do if not seen[owner] then pin:Destroy();self.pins[owner]=nil end end
     self:drawDot(state,zoom,hoverTile,colors)

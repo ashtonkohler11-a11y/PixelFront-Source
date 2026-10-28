@@ -194,6 +194,7 @@ function Shop:confirm()
     self:cancelConfirmation()
     if item.category=="Currency" then
         if Run:IsStudio() or not self.productInfo[item.id] or item.productId<=0 then return end
+        pcall(function() require(script.Parent.StatsReport).prompt(tostring(item.id),"shop") end) -- STATS v3
         local ok=pcall(function()Marketplace:PromptProductPurchase(Players.LocalPlayer,item.productId)end)
         self.message=if ok then "Your currency balance updates after Roblox confirms the purchase." else "Purchase prompt unavailable. Please try again."
         self:refresh()
@@ -213,6 +214,7 @@ end
 function Shop:prompt(kind: string,id: number)
     if self.pendingPrompt or Run:IsStudio() then return end
     local pending={kind=kind,id=id};self.pendingPrompt=pending;self.message="Purchase prompt open.";self:refresh()
+    pcall(function() require(script.Parent.StatsReport).promptFor(kind,id,"shop") end) -- STATS v3
     local ok=pcall(function()
         if kind=="Pass" then Marketplace:PromptGamePassPurchase(Players.LocalPlayer,id)
         else Marketplace:PromptProductPurchase(Players.LocalPlayer,id) end

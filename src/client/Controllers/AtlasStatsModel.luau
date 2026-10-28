@@ -162,14 +162,14 @@ local function groupsFor(totals: {[string]: number}, count: number, mostGold: nu
             row("Most gold / match", mostGold), { label = "Peak land observed", value = Model.formatPercent(peakLand) } } },
         { id = "Construction", lead = Model.formatNumber(if count > 0 then sumFields(totals, BUILDINGS) else nil), label = "Builds & upgrades ordered", rows = {
             row("City orders", totals.cityConstructed), row("Factory orders", totals.factoryConstructed), row("Port orders", totals.portConstructed),
-            row("Defense post orders", totals.defensePostConstructed), { label = "Silo / SAM orders",
+            row("Defense Post orders", totals.defensePostConstructed), { label = "Missile Silo / SAM Launcher orders", -- the build dock's names (R21)
                 value = Model.formatNumber(totals.missileSiloConstructed) .. " / " .. Model.formatNumber(totals.samLauncherConstructed) } } },
         { id = "Naval", lead = Model.formatNumber(totals.warshipConstructed), label = "Warships commissioned", rows = {
             row("Trade voyages", nil), row("Warships destroyed", nil), row("Transport launches", nil),
             row("Piracy gold", totals.piracyGold), row("Peak fleet observed", peakFleet) } },
         { id = "Nuclear", lead = "—", label = "Missiles launched", rows = {
-            row("Atom bombs", nil), row("Hydrogen bombs", nil), row("MIRVs", nil), row("Missiles intercepted", nil),
-            row("Silo orders", totals.missileSiloConstructed) } },
+            row("Atom Bombs", nil), row("Hydrogen Bombs", nil), row("MIRVs", nil), row("Missiles intercepted", nil),
+            row("Missile Silo orders", totals.missileSiloConstructed) } },
     }
 end
 

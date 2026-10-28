@@ -55,4 +55,20 @@ function Line.clearBelow(node: GuiObject,connections: {RBXScriptConnection})
     end
     watch(node,apply,connections)
 end
+
+-- R1 (MM 2026-10-28: "titles scale like desk", no phone-only cap or boost): a page-top title takes its share of the 1080-high
+-- design like everything else, while its row and buttons keep Roblox's top-bar size (R3). A UIScale on the label
+-- (PFTitleScale), so the row's centred list layout re-flows it; the screen's height drives it.
+Line.DESIGN_H=1080
+function Line.scaleTitle(label: Instance?,connections: {RBXScriptConnection})
+    if not (label and label:IsA("GuiObject")) then return end
+    local gui=label:FindFirstAncestorWhichIsA("LayerCollector")
+    if not (gui and gui:IsA("ScreenGui")) then return end
+    local scale=label:FindFirstChild("PFTitleScale")
+    if not (scale and scale:IsA("UIScale")) then scale=Instance.new("UIScale");scale.Name="PFTitleScale";scale.Parent=label end
+    local s: UIScale=scale :: any
+    local function apply() local h=gui.AbsoluteSize.Y;if h>0 then s.Scale=h/Line.DESIGN_H end end
+    table.insert(connections,gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(apply))
+    apply()
+end
 return Line

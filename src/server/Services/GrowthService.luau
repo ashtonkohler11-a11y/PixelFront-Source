@@ -107,7 +107,10 @@ local function load(player: Player)
     if inviter and inviter > 0 then
         local okHistory, history = pcall(function() return deps.levels and deps.levels.history and deps.levels.history(userId) end)
         local played = not okHistory or type(history) ~= "table" or history.failed == true or (tonumber(history.matches) or 0) > 0
-        if Growth.referred(record, userId, inviter, played) then task.spawn(save, userId) end
+        if Growth.referred(record, userId, inviter, played) then
+            task.spawn(save, userId)
+            pcall(function() require(script.Parent.PlayerProfileService).invite("referred") end) -- stats
+        end
     end
     payInvites(userId)
 end
@@ -142,7 +145,10 @@ local function final(info: any)
     end
     if peak > 0 and profile and profile.loaded then -- a real first match pays whoever invited this player
         local inviter = Growth.firstMatch(profile.record)
-        if inviter then task.spawn(save, userId); creditInviter(inviter, userId) end
+        if inviter then
+            task.spawn(save, userId); creditInviter(inviter, userId)
+            pcall(function() require(script.Parent.PlayerProfileService).invite("credited") end) -- stats
+        end
     end
 end
 

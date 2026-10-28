@@ -27,11 +27,18 @@ local PHONE_HEIGHT=520
 local MODES={"Easy","Medium","Hard"}
 local TOP_ROWS,MORE_MAX=3,20
 local JOIN_GAP=3.25 -- the server takes one JoinPublic per 3 s (LobbyContract.RateLimits); the page paces sends
+local TAP_GRACE=.8 -- a public row tapped this soon after it changed joins what it showed before
 local C={ink=Color3.fromHex("#f2f2f2"),sub=Color3.fromHex("#b8bcc4"),muted=Color3.fromHex("#8a8a8a"),green=Color3.fromHex("#5fd38a"),
     ice=Color3.fromHex("#9fc0ff"),cobalt=Color3.fromHex("#3678ff"),pipOff=Color3.fromHex("#3a3d45"),pipOn=Color3.fromHex("#cfd6e2"),
     chip=Color3.fromHex("#1f1f1f"),red=Color3.fromHex("#f87171")}
 local MODE_TINT={Easy=Color3.fromHex("#5fd38a"),Medium=Color3.fromHex("#3678ff"),Hard=Color3.fromHex("#f87171")}
-local LINE_SOLO="Friends start allied and join your matches."
+local LINE_SOLO="Friends start allied." -- UI audit build-out: the old 7-word line read 5 px on an A06 (R5); the reason stays
+-- UI audit build-out (Ashton: "just build it all"): every Home motion goes through PF - 4's shared UiMotion (R4 centred, reduced
+-- motion and tap-to-skip handled there); pcall keeps the CLI fixtures (no UiMotion) running
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end)
+local Motion: any=if okMotion and type(UiMotion)=="table" then UiMotion else nil
+local okZone,Zone=pcall(function() return require(script.Parent.HitZone) end)
+local HitZone: any=if okZone and type(Zone)=="table" and type(Zone.signal)=="function" then Zone else nil
 
 local function finite(value: any): boolean return type(value)=="number" and value==value and math.abs(value)<math.huge end
 local function integer(value: any): number? return if finite(value) and value>=0 then math.floor(value) else nil end
@@ -48,7 +55,7 @@ end
 
 function Home.new(root: Frame,context: any): any
     local self: any=setmetatable({root=root,context=context,model={},offset=0,connections={},visible=false,destroyed=false,
-        mode="Medium",variant=nil,pools={},preview=Preview.new(context.mapSources),lastJoinAt=-math.huge,statusUntil=0},Home)
+        mode="Easy",variant=nil,pools={},preview=Preview.new(context.mapSources),lastJoinAt=-math.huge,statusUntil=0,rowPrev={}},Home)
     self.layouts={Desk=root:FindFirstChild("Desk"),Phone=root:FindFirstChild("Phone")}
     self.templates=root:FindFirstChild("Templates")
     if context.soloDifficulty then
@@ -76,7 +83,24 @@ function Home.new(root: Frame,context: any): any
     table.insert(self.connections,root:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() self:pickLayout() end))
     self:bindArmory()
     self:pickLayout()
+    self:bindSheens()
     return self
+end
+-- build-out: the logo's slow shine (every 8 s) and, until your first match, one light sweep across PLAY SOLO every 6 s
+-- (author-pf3-build-home's PFLogoShine / PFKeySheen overlays: a white band in a UIGradient). UiMotion runs them only while shown.
+function Home:bindSheens()
+    if not Motion then return end
+    self.sheens=self.sheens or {}
+    local logo=self.root:FindFirstChild("PFLogoShine",true);local lg=logo and logo:FindFirstChildWhichIsA("UIGradient")
+    if lg then table.insert(self.sheens,Motion.sheen(lg,{period=8,sweep=1.1})) end
+    local me=Players.LocalPlayer
+    local matches=me and me:GetAttribute("OpenFrontMatches")
+    if type(matches)=="number" and matches==0 then
+        for _,layout in self.layouts do
+            local sheen=layout and find(layout,"PFKeySheen");local g=sheen and sheen:FindFirstChildWhichIsA("UIGradient")
+            if g then table.insert(self.sheens,Motion.sheen(g,{period=6,sweep=.7})) end
+        end
+    end
 end
 -- PF - 5: the Armory tile: the catalog's items (shelf order), what you own (the CosmeticsState packet), a hover lift
 function Home:bindArmory()
@@ -87,12 +111,13 @@ function Home:bindArmory()
     if ok and type(cat)=="table" and type(cat.items)=="table" then
         for _,item in cat.items do if Showcase.items[item.id] then table.insert(self.armoryItems,item.id) end end
     end
+    self.starterPacks=if ok and type(cat)=="table" and type(cat.packs)=="table" then cat.packs else {} -- UX audit #5: the tile's Starter chip
     task.spawn(function()
         local folder=ReplicatedStorage:WaitForChild("OpenFrontRemotes",30);local state=folder and folder:WaitForChild("CosmeticsState",30)
         if self.destroyed or not (state and state:IsA("RemoteEvent")) then return end
         table.insert(self.connections,state.OnClientEvent:Connect(function(packet: any)
             if type(packet)=="table" and packet.kind=="Cosmetics" and type(packet.arsenal)=="table" and type(packet.arsenal.owned)=="table" then
-                self.owned=packet.arsenal.owned;self:paintArmory()
+                self.owned=packet.arsenal.owned;self.ownedKnown=true;self:paintArmory()
             end
         end))
     end)
@@ -118,7 +143,21 @@ function Home:stepHero(dt: number)
     local index=(frame//(Showcase.FRAMES*HERO_LOOPS))%#self.armoryItems+1
     local item=self.armoryItems[index]
     if frame==self.heroFrame then return end;self.heroFrame=frame
-    if index~=self.heroIndex then self.heroIndex=index;self:paintArmory() end -- the carousel pip follows the shown item
+    if index~=self.heroIndex then
+        -- build-out (PF - 4's home.armory idea): the next hero crossfades in (.25 s) over a still copy of the last frame of the old
+        -- one (a temporary ghost, gone when it has faded), instead of a hard cut; the first paint just shows
+        if self.heroIndex~=nil and Motion and type(Motion.tween)=="function" and not Motion.reduced(art) and art.Image~="" then
+            local base=art:GetAttribute("PFBaseT");if type(base)~="number" then base=art.ImageTransparency;art:SetAttribute("PFBaseT",base) end
+            local ghost=art:Clone();ghost.Name="PFHeroGhost";ghost.ZIndex=art.ZIndex+1
+            for _,c in ghost:GetChildren() do if not c:IsA("UICorner") then c:Destroy() end end
+            ghost.Parent=art.Parent
+            art.ImageTransparency=1
+            Motion.tween(art,{ImageTransparency=base},.25)
+            Motion.tween(ghost,{ImageTransparency=1},.25)
+            task.delay(.3,function() ghost:Destroy() end)
+        end
+        self.heroIndex=index;self:paintArmory() -- the carousel pip follows the shown item
+    end
     art.Image=Showcase.items[item].sheet
     art.ImageRectOffset=(Showcase.frame(frame%Showcase.FRAMES));art.ImageRectSize=Vector2.new(Showcase.BASE.w,Showcase.BASE.h)
 end
@@ -134,7 +173,8 @@ function Home:bind(layout: Instance)
         for _,name in path do node=node and node:FindFirstChild(name,true) end
         -- r5: the Desk's Settings + ? sit on the home root (Roblox's line, outside the scaled canvas)
         if not node and path[1]=="TopLeft" and layout.Name=="Desk" then node=self.root:FindFirstChild("TopLeft");node=node and node:FindFirstChild(path[2]) end
-        if node and node:IsA("GuiButton") then table.insert(self.connections,node.Activated:Connect(function()
+        -- (UI audit R8: a key's PFHitZone strips answer too, through HitZone; the fixtures have no HitZone)
+        if node and node:IsA("GuiButton") then table.insert(self.connections,(if HitZone then HitZone.signal(node) else node.Activated):Connect(function()
             if self.visible and not self.destroyed then callback() end
         end)) end
         -- r5: the invisible 44 px hit boxes (a PFHits layer under each group; PFFor = this path) do the same thing
@@ -158,6 +198,38 @@ function Home:bind(layout: Instance)
     on({"Custom","Stats"},function() if context.openStats then context.openStats() end end)
     on({"Custom","Settings"},function() if context.openSettings then context.openSettings() end end) -- PF044: the game Settings page (Ashton)
     on({"Party","Invite"},function() if context.partyInvite then context.partyInvite() end end)
+    -- build-out: the Shop card's balance + (the Armory wallet's twin) lands on the Cobalt packs; Quick join takes the fullest room
+    on({"TopRight","PFWalletPlus"},function() if context.openCobalt then context.openCobalt() elseif context.openShop then context.openShop() end end)
+    on({"Public","PFQuickJoin"},function() local list=self:holdOrder(self:entries());if list[1] then self:join(list[1].id) end end)
+    self:bindMotion(layout)
+end
+-- build-out motion: the mode chips and the Look / Stats pair grow the hovered one while the others give way (R4); the top-left
+-- discs press like Roblox's own; the Shop bag hops on hover
+function Home:bindMotion(layout: Instance)
+    if not Motion then return end
+    local function nodes(names: {string},under: string): {GuiObject}
+        local parent=find(layout,under);local out={}
+        for _,n in names do local node=parent and parent:FindFirstChild(n);if node and node:IsA("GuiObject") then table.insert(out,node) end end
+        return out
+    end
+    -- (PF-4.home.modes.0 / home.custom.0: hovered grows, the rest give way, from the centre; the kit's hover lift stays off them)
+    local modes=nodes(MODES,"Modes");if #modes==3 then for _,c in modes do c:SetAttribute("PFCardNoLift",true) end;table.insert(self.connections,Motion.pair(modes,{grow=1.03,give=.985})) end
+    local pairCards=nodes({"Look","Stats"},"Custom");if #pairCards==2 then for _,c in pairCards do c:SetAttribute("PFCardNoLift",true) end;table.insert(self.connections,Motion.pair(pairCards)) end
+    local top=self.root:FindFirstChild("TopLeft");local hits=self.root:FindFirstChild("PFTopHits")
+    for _,name in {"Settings","Help"} do
+        local disc=top and top:FindFirstChild(name);local hit=hits and hits:FindFirstChild("Hit_TopLeft_"..name)
+        if disc and disc:IsA("GuiObject") then table.insert(self.connections,Motion.press(if hit then hit else disc,{target=disc})) end
+    end
+    local shop=find(layout,"TopRight");shop=shop and shop:FindFirstChild("Shop")
+    local bag=shop and (shop:FindFirstChild("Bag",true) or shop:FindFirstChild("Glyph",true))
+    if shop and bag and bag:IsA("GuiObject") then
+        local base=bag.Position
+        table.insert(self.connections,shop.MouseEnter:Connect(function()
+            if Motion.reduced(bag) then return end
+            bag.Position=base;Motion.tween(bag,{Position=base+UDim2.fromOffset(0,-3)},.09,Enum.EasingStyle.Quad,Enum.EasingDirection.Out)
+            task.delay(.09,function() Motion.tween(bag,{Position=base},.18,Enum.EasingStyle.Back,Enum.EasingDirection.Out) end)
+        end))
+    end
 end
 
 -- the layout for this screen. PF044 r5 (Ashton 2026-10-24: "you didnt need to change shit for mobile, you can have that
@@ -181,9 +253,13 @@ function Home:now(): number return os.clock()+self.offset end
 -- Solo -------------------------------------------------------------------------
 function Home:setMode(mode: string)
     if not table.find(MODES,mode) then return end
+    local changed=mode~=self.mode
     self.mode=mode
     if self.context.setSoloDifficulty then self.context.setSoloDifficulty(mode) end
     self:paintModes()
+    -- build-out: the picked chip pops (1.06, Back) as its Sel lands
+    local layout=self:layout();local chip=layout and find(layout,mode)
+    if changed and Motion and chip then Motion.pop(chip,1.06,.2) end
 end
 function Home:playSolo()
     local context=self.context
@@ -264,7 +340,11 @@ function Home:row(list: string,index: number): any?
     local public=find(layout,"Public") -- scoped: the glyphs' pixel pieces have names too (the Shop bag's "Top")
     local parent=public and find(public,if list=="top" then "Top" else "More");if not parent then return nil end
     local row: any=template:Clone();row.Name="Row"..index;row.LayoutOrder=index;row.Visible=false;row.Parent=parent
-    table.insert(self.connections,row.Activated:Connect(function() local entry=row:GetAttribute("PFEntry");if self.visible and entry then self:join(entry) end end))
+    table.insert(self.connections,row.Activated:Connect(function()
+        local entry=row:GetAttribute("PFEntry")
+        local prev=self.rowPrev[row];if prev and os.clock()-prev.at<TAP_GRACE then entry=prev.id end
+        if self.visible and entry then self:join(entry) end
+    end))
     self:bindCard(row)
     rows[index]=row
     return row
@@ -284,6 +364,16 @@ function Home:paintRow(row: any,entry: any,now: number)
     end
     local n,cap=seats(entry)
     local full=cap>0 and n>=cap
+    local was=row:GetAttribute("PFEntry")
+    if was~=entry.id then self.rowPrev[row]=if was then {id=was,at=os.clock()} else nil end
+    -- build-out motion: a row that now shows another room settles in (.96 -> 1); a seat that just filled pops its pip
+    local seen=row:GetAttribute("PFSeats")
+    if Motion and was~=nil and was~=entry.id then Motion.pop(row,.96,.2)
+    elseif Motion and was==entry.id and type(seen)=="number" and n>seen then
+        local pips0=find(row,"Pips");local pip=pips0 and pips0:FindFirstChild("Pip"..n)
+        if pip then Motion.pop(pip,1.3,.18) end
+    end
+    row:SetAttribute("PFSeats",n)
     row:SetAttribute("PFEntry",entry.id)
     row.Visible=true
     find(row,"MapName").Text=tostring(entry.config.gameMap or "Public match")
@@ -309,7 +399,15 @@ function Home:paintRow(row: any,entry: any,now: number)
         label.Text=if queued then "IN QUEUE ×" elseif self:follower() then "LEADER" elseif full then "FULL" else "JOIN"
         label.TextColor3=if queued then C.ink elseif self:follower() or full then C.muted else C.ice
     end
-    if join then join.BackgroundTransparency=if queued then 0 else 1 end
+    if join then
+        -- build-out: joining the queue pops the key as its fill lands (.18 s); leaving fades it back out
+        local wasQueued=join:GetAttribute("PFQueued")==true
+        if Motion and queued~=wasQueued then
+            Motion.tween(join,{BackgroundTransparency=if queued then 0 else 1},.18)
+            if queued then Motion.pop(join,1.08,.18) end
+        else join.BackgroundTransparency=if queued then 0 else 1 end
+        join:SetAttribute("PFQueued",queued)
+    end
     -- queued / full: the Sel overlay (the kit owns the body's stroke)
     local sel=find(row,"Sel")
     if sel then
@@ -319,10 +417,37 @@ function Home:paintRow(row: any,entry: any,now: number)
     end
     local well=find(row,"Well");if well then self.preview:set(well,entry.config.gameMap) end
 end
+-- UI audit (PF - 3, 2026-10-28): the rows re-sorted under the pointer (aimed at Africa, the tap joined United States). While the
+-- mouse is over the list the shown order holds (rooms still listed keep their row, gone ones drop out, new ones join the end)
+-- and it re-sorts once the mouse leaves; a tap within TAP_GRACE of its row changing joins what the row showed before.
+function Home:pointerOnList(): boolean
+    local UserInputService=game:GetService("UserInputService")
+    local t=UserInputService:GetLastInputType().Name
+    if t~="MouseMovement" and t~="MouseButton1" and t~="MouseWheel" then return false end
+    local layout=self:layout();local public=layout and find(layout,"Public")
+    if not (public and public:IsA("GuiObject")) then return false end
+    local gui=public:FindFirstAncestorWhichIsA("ScreenGui")
+    local m=UserInputService:GetMouseLocation()-(if gui and gui.IgnoreGuiInset then Vector2.zero else GuiService:GetGuiInset())
+    local p,s=public.AbsolutePosition,public.AbsoluteSize
+    return m.X>=p.X and m.X<=p.X+s.X and m.Y>=p.Y and m.Y<=p.Y+s.Y
+end
+function Home:holdOrder(list: {any}): {any}
+    local shown=self.shownOrder
+    if type(shown)=="table" and self:pointerOnList() then
+        local byId,used,out={},{},{}
+        for _,e in list do byId[e.id]=e end
+        for _,id in shown do local e=byId[id];if e then table.insert(out,e);used[id]=true end end
+        for _,e in list do if not used[e.id] then table.insert(out,e) end end
+        list=out
+    end
+    local ids={};for i,e in list do ids[i]=e.id end
+    self.shownOrder=ids
+    return list
+end
 function Home:paintPublic()
     local layout=self:layout();local pool=self.pools[self.variant]
     if not layout or not pool then return end
-    local list,now=self:entries(),self:now()
+    local list,now=self:holdOrder(self:entries()),self:now()
     local wells={}
     for i=1,math.max(TOP_ROWS,#pool.top) do
         local entry=list[i]
@@ -338,6 +463,15 @@ function Home:paintPublic()
     local public=find(layout,"Public")
     local empty=public and find(public,"Empty");if empty then empty.Visible=#list==0 end
     local moreHead=public and find(public,"MoreHead");if moreHead then moreHead.Visible=more>0 end
+    -- build-out (R21: "which United States do I press?"): Quick join (author-pf3-build-home) takes the fullest room in one tap;
+    -- it names that room and steps aside while you're queued or following a leader
+    local quick=public and find(public,"PFQuickJoin")
+    if quick then
+        local best=list[1]
+        quick.Visible=best~=nil and self:queuedId()==nil and not self:follower()
+        local sub=quick:FindFirstChild("Sub",true)
+        if sub and best then local n,cap=seats(best);sub.Text=string.format("%s · %d/%d",tostring(best.config.gameMap or "Public match"),n,cap) end
+    end
     self.preview:update(wells,self.root,self.visible)
 end
 function Home:join(id: string)
@@ -389,9 +523,18 @@ function Home:paintParty()
         local member=members[i]
         local avatar,plus=seat:FindFirstChild("Avatar"),seat:FindFirstChild("Plus")
         local uid=member and integer(member.userId)
+        -- build-out motion: a friend who just took the seat pops in (.6 -> 1, Back); empty seats' rims breathe while you're alone
+        local had=seat:GetAttribute("PFSeatUser")
         if avatar then avatar.Visible=uid~=nil and uid>0;avatar.Image=if uid and uid>0 then string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=150&h=150",uid) else "" end
+        if Motion and avatar and uid and uid>0 and had~=uid and i>1 then Motion.pop(avatar,.6,.25) end
+        seat:SetAttribute("PFSeatUser",uid)
         if plus then plus.Visible=member==nil end
         local rim=seat:FindFirstChild("Rim");if rim then rim.Color=if i==1 and member then C.cobalt else Color3.fromHex("#4a4a4a") end
+        self.seatGlow=self.seatGlow or {}
+        local glowing=self.seatGlow[seat]
+        local want=Motion~=nil and rim~=nil and rim:IsA("UIStroke") and member==nil and #members==1
+        if want and not glowing then self.seatGlow[seat]=Motion.glow(rim,{lo=.2,hi=.5,period=2.4})
+        elseif not want and glowing then glowing();self.seatGlow[seat]=nil end
     end
     local line=find(panel,"Line")
     if line then line.Text=if #members>1 then string.format("%d in your party: you start allied and join matches together.",#members) else LINE_SOLO end
@@ -400,12 +543,35 @@ function Home:updateCommerce(state: any)
     if self.destroyed or type(state)~="table" then return end
     local profile=type(state.profile)=="table" and state.profile or {}
     self.balance=if profile.loaded and not profile.failed and finite(profile.balance) then profile.balance else nil
+    self.ownedCosmetics=if profile.loaded and type(profile.owned)=="table" then profile.owned else nil
     self:paintCobalt()
 end
+-- build-out ("the you-can-buy dot", Ashton): the cheapest Shop item you don't own yet and can pay for in Cobalt lights the dot
+-- on Home's Shop card (PFBuyDot, author-pf3-build-home); bundles, pack-only and pass-only items don't count
+function Home:canBuy(): boolean
+    local balance,owned=self.balance,self.ownedCosmetics
+    if not balance or not owned then return false end
+    local ok,Catalog=pcall(function() return require(ReplicatedStorage.Shared.CosmeticCatalog) end)
+    if not ok or type(Catalog)~="table" or type(Catalog.items)~="table" then return false end
+    for _,item in Catalog.items do
+        if type(item.price)=="number" and item.price>0 and item.price<=balance and not item.packOnly and not item.passOnly
+            and item.category~="Bundle" and owned[item.id]~=true then return true end
+    end
+    return false
+end
 function Home:paintCobalt()
+    local can=self:canBuy()
     for _,layout in self.layouts do
         local amount=layout and find(layout,"Amount")
-        if amount then amount.Text=if self.balance then commas(self.balance) else "…" end
+        -- build-out: a payout counts up (.6 s) instead of snapping
+        if amount then
+            if self.balance and Motion then Motion.count(amount,self.balance) else amount.Text=if self.balance then commas(self.balance) else "…" end
+        end
+        local dot=layout and find(layout,"PFBuyDot")
+        if dot then
+            local was=dot.Visible;dot.Visible=can
+            if can and not was and Motion then Motion.pop(dot,1.4,.25) end
+        end
     end
 end
 -- PF - 5: the Armory tile shows only while the menu provides context.openArmory (PF - 1's page): owned count + pips
@@ -415,9 +581,22 @@ function Home:paintArmory()
     local has=type(self.context.openArmory)=="function"
     local total,own=#self.armoryItems,0
     for _,id in self.armoryItems do if self.owned[id] then own+=1 end end
+    -- UX audit #5 (Ashton: "Ship it"): the cheapest Starter pack that still gives something new, until it's owned
+    local starter=nil
+    if self.ownedKnown then for _,pack in self.starterPacks or {} do
+        local fresh=false;for _,id in pack.items or {} do if not self.owned[id] then fresh=true end end
+        if fresh and type(pack.robux)=="number" and (starter==nil or pack.robux<starter.robux) then starter=pack end
+    end end
+    self.starterShown=if has then starter else nil -- STATS v3: counted as seen on each home show (setVisible)
     for _,layout in self.layouts do
         local group=layout and find(layout,"ArmoryGroup");if not group then continue end
         group.Visible=has
+        local chip=group:FindFirstChild("PFStarterChip",true) -- author-pf1-starter-chip
+        if chip then
+            -- build-out (PF - 1's cross-review, R12): the Starter Pack showed twice on Home; the Jackpot box under Play carries it
+            chip.Visible=false
+            local word=chip:FindFirstChild("Label");if word and starter then word.Text="◆ STARTER · "..utf8.char(0xE002).." "..tostring(starter.robux) end
+        end
         local label=find(group,"Owned");label=label and label:FindFirstChild("Label")
         if label then label.Text=string.format("%d/%d OWNED",own,total) end
         local pips=find(group,"Pips")
@@ -430,9 +609,10 @@ function Home:paintArmory()
             pip.Visible=id~=nil
             if carousel then
                 local shown=i==(self.heroIndex or 1)
-                pip.Size=UDim2.fromScale(if shown then 24/350 else 10/350,1)
-                pip.BackgroundColor3=if shown then SHOWN elseif id and self.owned[id] then GOLD else DIM
-                pip.BackgroundTransparency=if shown or (id and self.owned[id]) then 0 else .68
+                local goal={Size=UDim2.fromScale(if shown then 24/350 else 10/350,1),BackgroundColor3=if shown then SHOWN elseif id and self.owned[id] then GOLD else DIM,
+                    BackgroundTransparency=if shown or (id and self.owned[id]) then 0 else .68}
+                -- build-out: the long lit pip slides to the shown item (.2 s Quad Out; the pips' list eases with it)
+                if Motion and type(Motion.tween)=="function" and self.visible then Motion.tween(pip,goal,.2) else for k,v in goal do (pip :: any)[k]=v end end
             else
                 pip.Size=UDim2.fromScale(1/math.max(total,1)-.008,1)
                 pip.BackgroundColor3=if id and self.owned[id] then GOLD else PIP_OFF
@@ -476,6 +656,30 @@ function Home:setVisible(visible: boolean)
     if visible then
         if self.context.soloDifficulty then local m=self.context.soloDifficulty();if table.find(MODES,m) then self.mode=m end end
         self:pickLayout();self:paint()
+        -- build-out (home.page): the menu lands instead of cutting: the dim fades in .2 s and the Desk groups rise 1% of the
+        -- screen into place left to right, 40 ms apart (.22 s Quart Out). A rise, not a scale: the groups are corner-anchored
+        -- (R4), and Frames can't fade without a CanvasGroup. The authored spot is kept on the group (PFRestPos) and restored.
+        local layout=self:layout()
+        if Motion and layout and not Motion.reduced(layout) then
+            local dim=self.root:FindFirstChild("Dim")
+            if dim and dim:IsA("GuiObject") then
+                local base=dim:GetAttribute("PFRestTransparency")
+                if type(base)~="number" then base=dim.BackgroundTransparency;dim:SetAttribute("PFRestTransparency",base) end
+                dim.BackgroundTransparency=1;Motion.tween(dim,{BackgroundTransparency=base},.2)
+            end
+            for i,n in {"LeftGroup","ArmoryGroup","CentreGroup","RightGroup"} do
+                local g=layout:FindFirstChild(n)
+                if not g or not g:IsA("GuiObject") or not g.Visible then continue end
+                local rest=g:GetAttribute("PFRestPos")
+                if typeof(rest)~="UDim2" then rest=g.Position;g:SetAttribute("PFRestPos",rest) end
+                local home: UDim2=rest :: any
+                g.Position=home+UDim2.fromScale(0,.01)
+                task.delay((i-1)*.04,function()
+                    if self.visible and g.Parent then Motion.tween(g,{Position=home},.22,Enum.EasingStyle.Quart,Enum.EasingDirection.Out) else g.Position=home end
+                end)
+            end
+        end
+        local starter=self.starterShown;if starter then pcall(function() require(script.Parent.StatsReport).seen(tostring(starter.id),"home") end) end -- STATS v3
         if not self.ticker then
             local last=0
             self.ticker=RunService.Heartbeat:Connect(function(dt: number)

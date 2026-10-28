@@ -9,8 +9,17 @@ local Input=game:GetService("UserInputService")
 local Gui=game:GetService("GuiService")
 local Tween=game:GetService("TweenService")
 local Panel={};Panel.__index=Panel
+-- build-out motion (PF - 4's shared UiMotion): the card and the notice pop in / close quickly (party.card, party.left,
+-- home.invite_notice); pcall keeps the CLI fixtures running without it
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end)
+local Motion: any=if okMotion and type(UiMotion)=="table" then UiMotion else nil
+local function show(node: GuiObject,on: boolean)
+    if not Motion then node.Visible=on;return end
+    if on and not node.Visible then Motion.open(node,{from=.96}) elseif not on and node.Visible then Motion.close(node) end
+end
 local MAX=4
 local INVITE_SECONDS=30 -- a notice shows this long
+local LEFT_SECONDS=6 -- "Mika left the party" shows this long
 local COMPACT=90 -- under this button width (phones, 720p) the button shows the 40 px icon (the full stack + n/4 needs 86)
 -- the boards' seat colours, behind each headshot while it loads (and for Studio fakes)
 local FILLS={Color3.fromHex("#3678ff"),Color3.fromHex("#e07a3a"),Color3.fromHex("#2e9e4f"),Color3.fromHex("#b07ad9")}
@@ -23,9 +32,16 @@ local function paintSeat(image: any,member: any?,index: number)
     image.BackgroundColor3=FILLS[(index-1)%#FILLS+1]
     image.Image=if member then headshot(member.userId) else ""
 end
+-- The member who left between two Party packets of the same party (never you), or nil.
+function Panel.departed(was: any?,now: any?): any?
+    if type(was)~="table" or type(now)~="table" or was.id~=now.id or type(was.members)~="table" or type(now.members)~="table" then return nil end
+    local still={};for _,m in now.members do still[m.userId]=true end
+    for _,m in was.members do if not m.you and not still[m.userId] then return m end end
+    return nil
+end
 
 function Panel.new(nodes: any,context: any): any
-    local self: any=setmetatable({nodes=nodes,context=context,connections={},model={},open=false,destroyed=false,dismissedAt=nil},Panel)
+    local self: any=setmetatable({nodes=nodes,context=context,connections={},model={},open=false,destroyed=false,dismissedAt=nil,kicked={}},Panel)
     local function listen(signal: RBXScriptSignal,callback: any) table.insert(self.connections,signal:Connect(callback)) end
     local button,card=nodes.button,nodes.card
     -- PF - 5 Invite friends (AtlasMenu.PFInvite): INVITE opens it, here and on the home card
@@ -50,14 +66,16 @@ function Panel.new(nodes: any,context: any): any
         listen(row.Activated,function() if row.Empty.Visible then self:invite() end end)
         listen(row.Kick.Activated,function()
             local member=self.members and self.members[i]
-            if member and not member.you then self.context.facade.partyKick(member.userId) end
+            if member and not member.you then self.kicked[member.userId]=true;self.context.facade.partyKick(member.userId) end
         end)
     end
     listen(nodes.notice.Join.Activated,function()
         local invite=self.model.partyInvite
         if type(invite)=="table" then self.context.facade.partyJoin(invite.code) end
     end)
-    listen(nodes.notice.Close.Activated,function() self.context.facade.dismissPartyInvite() end)
+    listen(nodes.notice.Close.Activated,function()
+        if self:inviteShown() then self.context.facade.dismissPartyInvite() else self.left=nil;self:paint() end
+    end)
     -- a tap or click outside the card closes it
     listen(Input.InputBegan,function(input)
         if not self.open then return end
@@ -84,6 +102,7 @@ function Panel:setOpen(open: boolean)
     -- PF - 5 (Ashton: "it just goes away then when I lift mouse click it turns on again"): a press outside the card closes it on
     -- InputBegan; the same click's release (an opener's Activated) must not open it again
     if open and not self.open and self.outsideAt and os.clock()-self.outsideAt<.5 then self.outsideAt=nil;return end
+    if open and not self.open then pcall(function() require(script.Parent.StatsReport).open("Party") end) end -- STATS v3: a UI open
     self.open=open
     -- the first open makes your party (just you, leading) so the code is ready to share
     if open and type(self.model.party)~="table" then self.context.facade.partyOpen() end
@@ -115,6 +134,10 @@ function Panel:update(model: any)
     local function size(m: any): number local p=m and m.party;return if type(p)=="table" and type(p.members)=="table" then #p.members else 0 end
     local function inviteAt(m: any): any local i=m and m.partyInvite;return if type(i)=="table" then i.at else nil end
     self.model=model
+    -- MM 2026-10-27 (Ashton: "it never said I left the party"): someone leaving (a Solo start takes them out) shows
+    -- "<name> left the party" on the others' notice; not the leader's own removals
+    local gone=Panel.departed(was and was.party,model.party)
+    if gone and not self.kicked[gone.userId] then self.left={member=gone,at=os.clock()} end
     if self.friends then self.friends:update(model) end
     if self.painted then
         local sfx=require(script.Parent.Sfx)
@@ -181,10 +204,25 @@ function Panel:paintCard()
     card.Actions.Invite.Visible=#members<MAX
 end
 
+function Panel:leftShown(): any?
+    local left=self.left
+    if type(left)~="table" or os.clock()-left.at>LEFT_SECONDS or type(self.model.party)~="table" then return nil end
+    return left
+end
+-- An invite (with Join) first; else who just left (no Join).
 function Panel:paintNotice()
     local notice=self.nodes.notice
     local invite=self:inviteShown()
-    notice.Visible=invite~=nil and not self.open
+    local left=if invite then nil else self:leftShown()
+    show(notice,(invite~=nil or left~=nil) and not self.open)
+    notice.Join.Visible=left==nil
+    if left then
+        local members=self.model.party.members
+        notice.Title.Text=tostring(left.member.name or "A player").." left the party"
+        notice.Sub.Text="Party · "..(if type(members)=="table" then #members else 1).." / "..MAX
+        paintSeat(notice.Avatar,left.member,2)
+        return
+    end
     if not invite then return end
     local from=invite.from or {}
     notice.Title.Text=tostring(from.name or "A friend").." invited you"
@@ -214,13 +252,13 @@ end
 
 function Panel:paint()
     if self.destroyed then return end
-    self.nodes.card.Visible=self.open;self.nodes.pointer.Visible=self.open
+    show(self.nodes.card,self.open);self.nodes.pointer.Visible=self.open
     self:paintButton();self:paintCard();self:paintNotice();self:paintQueue()
 end
 -- The notice times out on its own (AtlasMenuController's clock).
 function Panel:updateTime()
     if self.destroyed then return end
-    local shown=self:inviteShown()~=nil
+    local shown=self:inviteShown()~=nil or self:leftShown()~=nil
     if self.nodes.notice.Visible~=(shown and not self.open) then self:paint() end
 end
 function Panel:isOpen(): boolean return self.open end

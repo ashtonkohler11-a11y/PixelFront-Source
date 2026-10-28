@@ -50,7 +50,13 @@ function Strip:render(data: any?,accent: Color3?): boolean
     local width=self:width()
     local keep=Strip.cellsThatFit(width,count)
     -- A region not laid out yet (0 wide) shows everything; the resize listener re-renders.
-    if width<=0 then keep=count end
+    -- PF - 1 audit 2026-10-28: on phones the top row IS laid out and leaves the region 0 wide (the icon bar and the
+    -- board take the row); showing everything there drew the cells' dividers, meter and dot as slivers at the top.
+    if width<=0 then
+        local row=self.region.Parent
+        if row and row:IsA("GuiObject") and row.AbsoluteSize.X>0 then node.Visible=false;return false end
+        keep=count
+    end
     if keep==nil then node.Visible=false;return false end
     local shown=Strip.pick(data.rows,keep)
     local identity=node.Identity

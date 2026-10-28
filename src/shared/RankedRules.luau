@@ -20,7 +20,7 @@ Ranked.TUNING = table.freeze({
     -- maps only (2026-10-01 policy; Availability.supports refuses Normal), so ffaFullSize stays "Compact" until Normal
     -- assets are imported (Ashton's call); then it is this one line.
     ffaFullAt = 12, ffaFullSize = "Compact",
-    tribes = 50,             -- Availability.MaxTribes; nations off in every ranked match
+    tribes = 50,             -- the old Availability.MaxTribes (the cap went 50 -> 125 on 2026-10-27; Ranked kept); nations off in every ranked match
 })
 -- the ladder: each tier's floor; divisions every 100 (III, II, I). Bronze holds everything under 1000.
 Ranked.TIERS = table.freeze({{name = "Bronze", from = 700}, {name = "Silver", from = 1000}, {name = "Gold", from = 1300},

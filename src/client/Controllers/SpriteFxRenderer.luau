@@ -2,6 +2,7 @@
 -- One FxSpritePass active array/pool per World, source Upload dispatch ordering.
 local Icons=require(script.Parent.ReferenceIcons)
 local VisualMath=require(script.Parent.WeaponsVisualMath)
+local okGeo,Geo=pcall(require,script.Parent.FrameGeometry) -- PF - 4 perf: one layout read a frame, not one per renderer
 local Vfx=require(game:GetService("ReplicatedStorage").Shared.PixelFrontVfxPolicy)
 -- the source blast art (fx.nukeRadius*) shrinks with the blast radii (Config.Nuclear.Scale, PixelFront x0.7, PF-033)
 local NUKE_SCALE=require(game:GetService("ReplicatedStorage").Shared.Config).Nuclear.Scale
@@ -127,7 +128,8 @@ function Manager:draw(owner: any,world: Frame,zoom: number,viewport: Frame,graph
         if not Vfx.enabled(graphics.vfx,category)then self:clearCategory(producer,category)end
     end end
     if not graphics.passEnabled.fx then return end
-    self:tick(now);local offset=world.AbsolutePosition-viewport.AbsolutePosition;local size=viewport.AbsoluteSize
+    self:tick(now);local offset=if okGeo then Geo.offset(world,viewport) else world.AbsolutePosition-viewport.AbsolutePosition
+    local size=if okGeo then Geo.viewportSize(viewport) else viewport.AbsoluteSize
     for index,record in self.activeFx do local ui=record.ui;if not ui then continue end
         local at=(index-1)*16;local x,y=(buffer.readf32(self.instanceBytes,at)+.5)*zoom,(buffer.readf32(self.instanceBytes,at+4)+.5)*zoom;local margin=math.max(record.width,record.height)*zoom
         ui.Position=UDim2.fromOffset(x,y);ui.Size=UDim2.fromOffset(record.width*zoom,record.height*zoom);ui.ImageRectOffset=Vector2.new(record.frame*record.width,0);ui.ImageTransparency=1-record.alpha/255

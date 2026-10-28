@@ -18,6 +18,15 @@ local Parts=require(script.Parent.LobbyScreenParts)
 local function hideRetired(node: Instance?) if node and node:IsA("GuiObject") then node.Visible=false end end
 local Names=require(Shared.OpenFrontClientNames)
 local Sfx=require(script.Parent.Sfx) -- PF043 H
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- build-out motion (PF - 4's shared module)
+local Motion: any=if okMotion and type(UiMotion)=="table" then UiMotion else nil
+-- the countdown number's "Go" exit (scale + fade) and its undo before any other text shows on it
+local exits: {[Instance]: {Tween}}=setmetatable({},{__mode="k"}) :: any
+local function settleNumber(number: TextLabel)
+    local running=exits[number];if running then for _,t in running do t:Cancel() end;exits[number]=nil end
+    number.TextTransparency=0
+    local pop=number:FindFirstChild("PFPop");if pop and pop:IsA("UIScale") then pop.Scale=1 end
+end
 local Screen={};Screen.__index=Screen
 local C={text=Color3.fromHex("#f2f2f2"),muted=Color3.fromHex("#9a9a9a"),hint=Color3.fromHex("#8c8c8c"),accent=Color3.fromHex("#3678ff"),
     raised=Color3.fromHex("#262626"),joined=Color3.fromHex("#1a2238"),dotNew=Color3.fromHex("#3678ff"),dotYou=Color3.fromHex("#ddbf76"),dot=Color3.fromHex("#8c8c8c"),error=Color3.fromHex("#ff7a70")}
@@ -25,7 +34,10 @@ local C={text=Color3.fromHex("#f2f2f2"),muted=Color3.fromHex("#9a9a9a"),hint=Col
 -- with a confirm, spectator rows, and for a host without the pass the same controls greyed with the gold tag
 -- and the WITHOUT THE PASS card. Nodes: tools/atlas/author-pf020-host-plus.luau. The server re-checks it all.
 local G={red=Color3.fromHex("#ff5a52"),dim=Color3.fromHex("#5a5a5a"),track=Color3.fromHex("#3a3a3a"),accent=Color3.fromHex("#3678ff")}
+-- 2026-10-28 (Ashton: "remove lobby host+ and just make it free"): every host has it, so the gold tag and the WITHOUT THE
+-- PASS card never show; Lock and Kick are simply live
 local function ownsHostPlus(): boolean
+    if require(Shared.LobbyContract).HostPlus.free then return true end
     local player=Players.LocalPlayer
     return player~=nil and player:GetAttribute("OpenFrontHostPlus")==true
 end
@@ -69,15 +81,17 @@ function RoomV2.new(root: Frame,context: any): any
     local function listen(signal: RBXScriptSignal,callback: any) table.insert(self.connections,signal:Connect(callback)) end
     local back=layer.Top.Back
     for _,b in {back,back:FindFirstChild("PFHit")} do if b then listen((b :: any).Activated,function() self:leave() end) end end
-    listen(canvas.Leave.Activated,function() self:leave() end)
-    listen(canvas.Start.Activated,function() if self.room and self.room.canStart and context.facade then context.facade.startLobby() end end)
+    -- UI audit R8: the room's small keys answer on their finger zones too (HitZone; author-pf3-hit-zones)
+    local HitZone=require(script.Parent.HitZone)
+    listen(HitZone.signal(canvas.Leave),function() self:leave() end)
+    listen(HitZone.signal(canvas.Start),function() if self.room and self.room.canStart and context.facade then context.facade.startLobby() end end)
     local card=self.card
-    listen(card.Copy.Activated,function()
+    listen(HitZone.signal(card.Copy),function()
         self:reveal(true);Sfx.play("u_copy")
         local code=card.Code;code:CaptureFocus();code.SelectionStart=1;code.CursorPosition=#code.Text+1
         card.InviteHint.Text=if Input.TouchEnabled and not Input.KeyboardEnabled then "Code selected: press and hold to copy it." else "Code selected: press Ctrl+C to copy it."
     end)
-    listen(card.Invite.Activated,function() if context.facade then context.facade.invite() end end)
+    listen(HitZone.signal(card.Invite),function() if context.facade then context.facade.invite() end end)
     local copy,codeBox=card.Copy,card.Code
     local function settle() self:reveal(codeBox:IsFocused() or Gui.SelectedObject==copy) end
     listen(copy.SelectionGained,function() self:reveal(true) end);listen(copy.SelectionLost,settle)
@@ -89,7 +103,7 @@ function RoomV2.new(root: Frame,context: any): any
             if (key=="settings.streamerMode" or key=="settings.anonymousNames") and self.room and not self.destroyed then self:update(self.model) end
         end)
     end
-    listen(card.Lock.Switch.Activated,function()
+    listen(HitZone.signal(card.Lock.Switch),function()
         if self.room and self.room.canManage and context.facade then context.facade.lockLobby(not (self.room.locked==true)) else self:showWithout() end
     end)
     listen(card.PFHostTag.Activated,function() self:showWithout() end)
@@ -137,7 +151,7 @@ function RoomV2:update(model: any)
     local card=self.card
     card.InviteHead.Text=(if room.visibility=="Private" then "PRIVATE LOBBY" else "PUBLIC LOBBY").." · INVITE CODE"
     self:paintCode()
-    card.InviteHint.Text=if room.visibility=="Private" then "Friends you invite join straight in. Others use the code." else "Listed in Join a lobby. Friends you invite join straight in."
+    card.InviteHint.Text="" -- UI audit build-out (R5): the code, Copy and Invite speak for themselves (Copy's own hint still shows)
     for _,n in {card.Code,card.Copy,card.Invite,card.InviteHint,card.InviteHead} do n.Visible=room.kind~="public" end
     self:paintRoster(room)
     self:paintHostPlus(room)
@@ -194,6 +208,7 @@ function RoomV2:paintRoster(room: any)
             row=self.layer.Templates.Member:Clone();row.Name=key;row.Visible=true;row.Parent=rowsFrame;self.rows[key]=row
             local made=row
             table.insert(self.connections,row.Kick.Activated:Connect(function() self:askKick(made) end))
+            if Motion and self.primed then Motion.pop(row,.94,.2) end -- build-out: a joining player's row settles in
         end
         row.Position=UDim2.fromScale(0,(index-1)*(ROW_H+ROW_GAP)/contentH);row.Size=UDim2.fromScale(1,ROW_H/contentH)
         local name=self:nameOf(member.name or member.username or "Player",member.userId,member.isYou)
@@ -218,7 +233,34 @@ function RoomV2:paintRoster(room: any)
         kick.TextColor3=if live then Color3.fromHex("#ff7a88") else G.dim
         row.Tag.Visible=row.Tag.Text~="" and not kick.Visible
     end
-    for key,row in self.rows do if not keep[key] then row:Destroy();self.rows[key]=nil end end
+    -- UI audit build-out (R12: "dead band under 1 player"): a private room's free seats show as "+ Invite a friend" rows up to the
+    -- roster's height; a tap opens the invite. A leaving member's row shrinks out (.16 s) instead of vanishing.
+    local seats=0
+    if room.kind~="public" and room.status=="Waiting" then
+        local fit=math.floor((ROWS_H+ROW_GAP)/(ROW_H+ROW_GAP))
+        seats=math.max(0,math.min(fit,tonumber(room.capacity) or fit)-n)
+    end
+    self.ghosts=self.ghosts or {}
+    for i=1,math.max(seats,#self.ghosts) do
+        local ghost=self.ghosts[i]
+        if i<=seats and not ghost then
+            ghost=self.layer.Templates.Member:Clone();ghost.Name="PFInviteSeat"..i;ghost.Parent=rowsFrame;self.ghosts[i]=ghost
+            ghost.Kick.Visible=false;ghost.Crown.Visible=false;ghost.Tag.Visible=false;ghost.Avatar.Image=""
+            ghost.Avatar.Initial.Visible=true;ghost.Avatar.Initial.Text="+";ghost.Avatar.BackgroundColor3=Color3.fromHex("#1d2330")
+            ghost.PlayerName.Text="Invite a friend";ghost.PlayerName.TextColor3=G.dim
+            local rim=ghost:FindFirstChild("Rim");if rim then rim.Color=Color3.fromHex("#262d3a");rim.Transparency=.4 end
+            if ghost:IsA("GuiButton") then table.insert(self.connections,ghost.Activated:Connect(function() if self.context.facade then self.context.facade.invite() end end)) end
+        end
+        if ghost then
+            ghost.Visible=i<=seats
+            local index=n+i
+            ghost.Position=UDim2.fromScale(0,(index-1)*(ROW_H+ROW_GAP)/contentH);ghost.Size=UDim2.fromScale(1,ROW_H/contentH)
+        end
+    end
+    for key,row in self.rows do if not keep[key] then
+        self.rows[key]=nil
+        if Motion then Motion.close(row,nil,function() row:Destroy() end) else row:Destroy() end
+    end end
     local playing=if type(room.players)=="number" then room.players else n
     local watching=n-playing
     self.card.PlayersHead.Text="PLAYERS · "..playing.." / "..tostring(room.capacity or playing)..(if watching>0 then " · "..watching.." watching" else "")..(if room.locked then " · LOCKED" else "")
@@ -251,6 +293,15 @@ function RoomV2:paintActions(room: any)
         self.pulsed=true
         local tween=Tween:Create(start,TweenInfo.new(.25,Enum.EasingStyle.Sine,Enum.EasingDirection.Out,0,true),{BackgroundColor3=Color3.fromHex("#ffe08a")});tween:Play()
     elseif count<2 then self.pulsed=false end
+    -- build-out (lobby.start): one slow sheen every 5 s while Start is ready and not yet pressed (author-pf3-build-found's
+    -- PFStartSheen overlay: a white band in a UIGradient; UiMotion runs it only while shown)
+    local sheen=start:FindFirstChild("PFStartSheen");local band=sheen and sheen:FindFirstChildWhichIsA("UIGradient")
+    local ready=can and room.status~="Starting"
+    if band and sheen:IsA("GuiObject") then
+        sheen.Visible=ready
+        if ready and not self.startSheen and Motion then self.startSheen=Motion.sheen(band,{period=5,sweep=.8})
+        elseif not ready and self.startSheen then self.startSheen();self.startSheen=nil end
+    end
 end
 function RoomV2:thumbs() self.setup:thumbs() end
 function RoomV2:setVisible(value: boolean)
@@ -262,6 +313,7 @@ function RoomV2:destroy()
     if self.destroyed then return end;self.destroyed=true
     for _,c in self.connections do c:Disconnect() end;table.clear(self.connections)
     if self.unsubscribe then self.unsubscribe();self.unsubscribe=nil end
+    if self.startSheen then self.startSheen();self.startSheen=nil end
     for _,row in self.rows do row:Destroy() end
     self.setup:destroy()
 end
@@ -406,7 +458,7 @@ function Screen:update(model: any)
     -- invite
     self.invite.Overline.Text=(if room.visibility=="Private" then "PRIVATE LOBBY" else "PUBLIC LOBBY").." · INVITE CODE"
     self:paintCode()
-    self.invite.InviteHint.Text=HINTS[room.visibility or "Public"] or HINTS.Public
+    self.invite.InviteHint.Text="" -- UI audit build-out (R5): no explainer line
     self.invite.Visible=room.kind~="public"
     self:paintRoster(room)
     self:paintHostPlus(room) -- PF020 G8
@@ -617,6 +669,7 @@ function Screen:paintTransfer(model: any)
         self.countdownAt=transfer.teleportAt;overlay.Message.Text="Starting the match…"
     else
         self.countdownAt=nil
+        settleNumber(overlay.Number)
         overlay.Number.Text=if transfer.phase=="Failed" then "!" else "…"
         overlay.Message.Text=tostring(transfer.message or (if transfer.phase=="Teleporting" then "Joining the match…" elseif transfer.phase=="Retrying" then "Trying again…" else "The teleport failed. You are still in the lobby."))
         if transfer.phase=="Failed" then self.failedMessage=overlay.Message.Text end
@@ -633,7 +686,7 @@ function Screen:showClosed(model: any,done: ()->()): boolean
     local message=if closed.reason=="StartFailed" and self.failedMessage then self.failedMessage else tostring(closed.message or "")
     if message=="" then message="The lobby closed." end
     local overlay=self.root.Countdown
-    self.countdownAt=nil;overlay.Visible=true;overlay.Number.Text="!";overlay.Message.Text=message
+    self.countdownAt=nil;overlay.Visible=true;settleNumber(overlay.Number);overlay.Number.Text="!";overlay.Message.Text=message
     self.closing={at=os.clock()+4,done=done}
     return true
 end
@@ -657,7 +710,15 @@ function Screen:tick()
             if left>0 then Sfx.play("u_count") end -- PF043 H: the 3-2-1
             number.Text=text
             local pop=number:FindFirstChild("PFPop")
-            if pop and not self:reduced() then pop.Scale=1.25;Tween:Create(pop,TweenInfo.new(.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Scale=1}):Play() end
+            if pop and not self:reduced() then
+                if left>0 then settleNumber(number);pop.Scale=1.25;Tween:Create(pop,TweenInfo.new(.3,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Scale=1}):Play()
+                else
+                    -- build-out (lobby.countdown): the last beat snaps out into the teleport: 1 -> 1.4 while it fades (.25 s Quad Out)
+                    settleNumber(number);local info=TweenInfo.new(.25,Enum.EasingStyle.Quad,Enum.EasingDirection.Out)
+                    local out={Tween:Create(pop,info,{Scale=1.4}),Tween:Create(number,info,{TextTransparency=1})}
+                    exits[number]=out;for _,t in out do t:Play() end
+                end
+            end
         end
     end
 end

@@ -35,7 +35,7 @@ local C={text=Color3.fromHex("#f2f2f2"),muted=Color3.fromHex("#9a9a9a"),cobalt=C
 local PLATES={centurion={fill=Color3.fromHex("#111318"),rim=Color3.fromHex("#e0a83a")},celestial={fill=Color3.fromHex("#1c2560"),rim=Color3.fromHex("#d8e0ef")},
     icicle={fill=Color3.fromHex("#2c5891"),rim=Color3.fromHex("#a9d4f2")}}
 
--- What a style is to you: "equipped", "equip", or {pass=id} / {level=n} (what unlocks it).
+-- What a style is to you: "equipped", "equip", or {pass=id} / {price=n} / {daily=day} / {locked=true} (what unlocks it).
 function Picker.access(entry: any,c: any): any
     local equipped=type(c)=="table" and type(c.equipped)=="table" and c.equipped.Nameplate or nil
     if type(equipped)~="string" then equipped=nil end
@@ -58,8 +58,8 @@ function Picker.access(entry: any,c: any): any
     -- PIVOT D15: a Cobalt unlock (no longer a level reward)
     local price=item and not item.levelOnly and tonumber(item.price)
     if price and price>0 then return {price=price} end
-    if entry.level then return {level=entry.level} end
-    return {level=0}
+    -- UI lock-in (PF - 4, R17): no "Reach Level N" any more (Levels are gone); a style with no way in reads Locked
+    return {locked=true}
 end
 local function grouped(n: number): string
     local s=tostring(math.floor(n));local out=s:reverse():gsub("(%d%d%d)","%1,"):reverse();return (out:gsub("^,",""))
@@ -141,7 +141,7 @@ function Picker:paint()
             local armed=self.armed and self.armed.key==entry.key and os.clock()<self.armed.until_
             state.Text=if armed then "Tap again · "..grouped(access.price) else grouped(access.price).." Cobalt";state.TextColor3=if armed then C.gold else C.blue
         elseif type(access)=="table" and access.daily then state.Text="Daily reward · Day "..tostring(access.daily);state.TextColor3=C.blue
-        else state.Text="Reach Level "..tostring(access.level);state.TextColor3=C.blue end
+        else state.Text="Locked";state.TextColor3=C.muted end
         card.Patch.Shade.Visible=type(access)=="table"
     end
 end
@@ -174,7 +174,7 @@ function Picker:choose(entry: any)
     end
     self:setOpen(false)
     if access.pass and self.context.openPass then self.context.openPass(access.pass)
-    elseif access.daily then local ok,View=pcall(require,script.Parent.DailyView);if ok and (View :: any).openStreak then (View :: any).openStreak() end end
+    elseif access.daily then local ok,View=pcall(require,script.Parent.DailyView);if ok and (View :: any).openStreak then (View :: any).openStreak(access.daily) end end -- that day lit
 end
 function Picker:setOpen(open: boolean)
     local root=self.nodes.root

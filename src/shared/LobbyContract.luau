@@ -127,7 +127,10 @@ Contract.RateLimits = table.freeze({
 
 -- PF020 G8 Lobby Host+ (pass_lobby_host_plus; ownership = the Game Pass OR profile-owned, replicated as
 -- the OpenFrontHostPlus attribute). Without it a host keeps every standard setting with up to 12 players.
+-- free (Ashton 2026-10-27: "remove lobby host+ and just make it free"): every host has Host+; the pass is off sale
+-- (CosmeticCatalog.retiredPasses) and OpenFrontHostPlus is true for everyone (CosmeticService)
 Contract.HostPlus = table.freeze({
+    free = true,
     pass = "pass_lobby_host_plus",
     freeMaxPlayers = 12,     -- the most without the pass; with it, the server max (Limits.maxPlayers)
     peaceMinutesMax = 10,    -- the peace timer, whole minutes
@@ -177,10 +180,10 @@ function Contract.defaultSettings(): any
         gameMap = Availability.DefaultMap,
         gameMode = "Free For All",
         playerTeams = 2,
-        difficulty = "Medium",
+        difficulty = "Easy", -- Ashton 2026-10-27: default Easy
         maxPlayers = 10,
         nations = Availability.defaultNations(Availability.DefaultMap),
-        bots = 25,
+        bots = 60, -- Ashton 2026-10-27: tribes x2.5 (was 25)
         disabledUnits = {},
         disabledPremium = {},         -- premium item bans (Arsenal ids; PF - 2's PremiumItems refuses them in the match)
         infiniteGold = false, infiniteTroops = false, instantBuild = false, randomSpawn = false,

@@ -42,7 +42,8 @@ local function nextUnlock(userId: number, earned: number): any?
         if price <= balance or item.packOnly or item.passOnly then continue end
         local okOwn, own = pcall(Cosmetics.owns, userId, item.id)
         if okOwn and own then continue end
-        if not best or price < best.price then best = {name = item.name, price = price, balance = balance} end
+        -- id + category (PF - 1: the end card's Unlock key opens the Shop on that item's tab)
+        if not best or price < best.price then best = {id = item.id, category = item.category, name = item.name, price = price, balance = balance} end
     end
     return best
 end

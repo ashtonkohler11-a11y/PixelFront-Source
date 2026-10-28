@@ -170,6 +170,7 @@ end
 function Leaderboard:togglePlayerStats()
     self.userToggled=true
     self.shown=not self.shown
+    if self.shown then pcall(function() require(script.Parent.StatsReport).open("Leaderboard") end) end -- STATS v3: a UI open
     if not self.shown then self:closePicker(false) end
     self:update(self.state,true)
     if not self.shown and self:focusInside(self.ui) and not self:focusInside(self.toggle) then GuiService.SelectedObject=self.toggle end
@@ -290,9 +291,12 @@ function Leaderboard.new(sidebar: Frame, template: TextButton, formatTroops: (nu
     self.chipOrder={};do local order=Style.chipOrder(Model.Data.playerColumns)
         for id in order do table.insert(self.chipOrder,id) end;table.sort(self.chipOrder,function(a,b) return order[a]<order[b] end) end
     local function connect(event,callback) table.insert(self.connections,event:Connect(callback)) end
-    connect(self.toggle.Activated,function() self:togglePlayerStats() end)
+    -- UI audit build-out: the close / columns discs' finger zones (PF - 3's HitZone strips) fire them too; test fakes: the key alone
+    local okZone,HitZone=pcall(function() return require(script.Parent.HitZone) end)
+    local function activated(key: any): any return if okZone and type(HitZone)=="table" and type(HitZone.signal)=="function" then HitZone.signal(key) else key.Activated end
+    connect(activated(self.toggle),function() self:togglePlayerStats() end)
     connect(self.header:WaitForChild("Picker").Activated,function() self:togglePicker() end)
-    if self.columnsButton then connect(self.columnsButton.Activated,function() self:togglePicker() end) end
+    if self.columnsButton then connect(activated(self.columnsButton),function() self:togglePicker() end) end
     local back=self.bar and self.bar:FindFirstChild("PFBack")
     if back then connect(back.Activated,function() self:closePicker(true) end) end
     for _,column in Model.Data.playerColumns do
@@ -535,8 +539,17 @@ function Leaderboard:renderChrome()
     end
     if self.titleUI then self.titleUI.Text=Style.Title;self.titleUI.TextColor3=palette.text end
     if self.countUI then
-        self.countUI.Text=#self.rows.." alive";self.countUI.TextColor3=palette.muted
-        self.countUI:SetAttribute("SourceTooltip","Living players")
+        -- the end card's count (UI audit 2026-10-28: "150 alive" here, "#22 of 25" there): players and nations, not tribes
+        local alive=#self.rows
+        local st=self.state
+        if type(st)=="table" and type(st.players)=="table" and type(st.counts)=="table" then
+            alive=0
+            for owner,p in st.players do
+                if type(p)=="table" and (p.playerType=="Human" or p.playerType=="Nation") and (tonumber(st.counts[owner]) or 0)>0 then alive+=1 end
+            end
+        end
+        self.countUI.Text=alive.." alive";self.countUI.TextColor3=palette.muted
+        self.countUI:SetAttribute("SourceTooltip","Living players and nations")
     end
 end
 -- Column labels: which show, the sorted one's arrow and accent underline.
@@ -590,6 +603,18 @@ function Leaderboard:render()
     if self.moreUI then self.moreUI.Visible=fit.more;self.moreUI.TextColor3=self.palette.muted end
     self.pinned.Visible=pinned~=nil
     if pinned then self:fill(self.pinned,pinned) end
+    -- UI audit build-out 2026-10-28 (UiMotion): you climbed: your rank number flashes gold and settles (.4 s); a scale would
+    -- reflow the laid-out row, so the kit's colour tween does it (pinned, or your row in the list)
+    if localRank and self.lastLocalRank and localRank<self.lastLocalRank and self.shown then
+        local okM,Motion=pcall(function() return require(script.Parent.UiMotion) end)
+        local mine=if pinned then self.pinned else nil
+        if not mine then for _,r in self.content:GetChildren() do if r:GetAttribute("Owner")==1 and r:IsA("GuiObject") and r.Visible then mine=r;break end end end
+        local cell=mine and mine:FindFirstChild("Rank",true)
+        if okM and type(Motion)=="table" and type(Motion.tween)=="function" and cell and cell:IsA("TextLabel") then
+            local rest=cell.TextColor3;cell.TextColor3=Color3.fromHex("#ffd77a");Motion.tween(cell,{TextColor3=rest},.4)
+        end
+    end
+    self.lastLocalRank=localRank
     self.ui:SetAttribute("Expanded",self.shown)
     self.ui:SetAttribute("LivingPlayers",#self.rows)
     self.ui:SetAttribute("PinnedOwner",if pinned then pinned.owner else nil)

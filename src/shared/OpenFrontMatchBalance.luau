@@ -6,7 +6,7 @@ local Config = require(script.Parent.Config)
 local Balance = { TerritoryGoldScale = Config.MatchBalance.TerritoryGoldScale }
 
 function Balance.supports(config: any): boolean
-    return Availability.supports(config) or Availability.supportsTutorial(config) -- the tutorial's Honshu too
+    return Availability.supports(config) or Availability.supportsTutorial(config) -- (and any tutorial-only map; none since 2026-10-27)
 end
 
 -- The caller supplies the source-shuffled order. No additional random draws:

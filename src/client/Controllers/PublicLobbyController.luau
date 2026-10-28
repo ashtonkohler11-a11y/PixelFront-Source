@@ -11,7 +11,7 @@ local Pick=require(Shared.RequeuePick) -- PF043: Play again joins the soonest jo
 local Controller={};Controller.__index=Controller
 local kinds={"ffa","team","special"}
 local modeLabels={ffa="FFA",team="TEAM",special="SPECIAL"}
-local modifierLabels={isCompact="Compact Map",isRandomSpawn="Random Spawn",isCrowded="Crowded",isHardNations="Hard Nations",isAlliancesDisabled="Alliances Disabled",isNukesDisabled="Nukes Disabled",isSAMsDisabled="SAMs Disabled",isPeaceTime="4min Peace",isWaterNukes="Water Nukes",isDoomsdayClock="Doomsday Clock"}
+local modifierLabels={isCompact="Compact Map",isRandomSpawn="Random Spawn",isCrowded="Crowded",isHardNations="Hard Nations",isAlliancesDisabled="Alliances Disabled",isNukesDisabled="Nukes Disabled",isSAMsDisabled="SAM Launchers Disabled",isPeaceTime="4min Peace",isWaterNukes="Water Nukes",isDoomsdayClock="Doomsday Clock"}
 local EVENT_HISTORY=20
 local UPDATE_SPACING=1.05
 local admissionOperations={Create=true,JoinLobby=true,JoinCode=true,JoinPublic=true}
@@ -146,6 +146,8 @@ function Controller:receive(packet:any)
             players=packet.players,capacity=packet.capacity}
     elseif kind=="Party"then -- PF036
         self.model.party=if type(packet.party)=="table"then packet.party else nil
+        -- a Solo / Tutorial start took you out of your party: the hop's screen says so (the Starting line already does)
+        if packet.left~=nil then pcall(function()(require(script.Parent.TeleportCover) :: any).note("You left your party")end)end
     elseif kind=="Rejoin"then -- PF036: a match you dropped out of is still going (nil: gone)
         self.model.rejoin=if type(packet.rejoin)=="table"then packet.rejoin else nil
         self.rejoinDismissed=false;self.model.rejoinHidden=nil;self.model.rejoining=false

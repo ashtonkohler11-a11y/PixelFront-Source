@@ -31,7 +31,17 @@ function Page.new(root: Instance,context: any): any
     bind(top.Row.Back,function() if context.back then context.back() end end)
     bind(tabs.Cosmetics,function() if context.refreshCommerce then context.refreshCommerce() end end)
     bind(tabs.Free,function() if context.openFree then context.openFree() end end)
-    bind(top.Wallet.Plus,function() if context.refreshCommerce then context.refreshCommerce() end end) -- the Cobalt packs live in Cosmetics
+    -- the Cobalt packs live in Cosmetics; UX audit #6: the + opens the Cobalt tab itself
+    bind(top.Wallet.Plus,function() if context.openCobalt then context.openCobalt() elseif context.refreshCommerce then context.refreshCommerce() end end)
+    -- UI audit (PF - 3, 2026-10-28): the category row's right fade + › means "more to the right", so it shows only while there is
+    -- (it stayed on with Skins / Missiles picked at the end of the row, and on an Inventory whose tabs all fit)
+    local head=top.Row:FindFirstChild("Header");local strip=head and head:FindFirstChild("PFTabs")
+    local cats=strip and strip:FindFirstChild("Categories");local fade=strip and strip:FindFirstChild("PFFade")
+    if cats and fade and cats:IsA("ScrollingFrame") and fade:IsA("GuiObject") then
+        local function more() fade.Visible=cats.AbsoluteCanvasSize.X-cats.AbsoluteWindowSize.X-cats.CanvasPosition.X>8 end
+        for _,p in {"CanvasPosition","AbsoluteCanvasSize","AbsoluteWindowSize"} do listen(cats:GetPropertyChangedSignal(p),more) end
+        task.defer(more)
+    end
     -- the Free tab's dot follows the lobby's Shop-tab dot (FreeRewardsRow lights it while the daily claim is ready)
     local dot=context.freeDot
     if dot then

@@ -27,6 +27,8 @@ local Model=require(Shared.LobbySettingsModel)
 local Preview=require(script.Parent.LobbyMapPreview)
 local Parts=require(script.Parent.LobbyScreenParts)
 local Sfx=require(script.Parent.Sfx) -- PF043 H
+local okMotion,UiMotion=pcall(function() return require(script.Parent.UiMotion) end) -- build-out motion (PF - 4's shared module)
+local Motion: any=if okMotion and type(UiMotion)=="table" then UiMotion else nil
 local Dock={};Dock.__index=Dock
 local C={cobalt=Color3.fromHex("#3678ff"),seatOn=Color3.fromHex("#3678ff"),seatRimOn=Color3.fromHex("#6f9bff"),inkOn=Color3.fromHex("#ffffff"),
     inkOff=Color3.fromHex("#7d838c"),eye=Color3.fromHex("#cfe1ff"),danger=Color3.fromHex("#ff7a70"),filled=Color3.fromHex("#8fb6ff")}
@@ -78,7 +80,8 @@ function Dock.new(root: Frame,context: any): any
         for _,name in {"Card","Pill","CardShadow","PillShadow"} do local n=root:FindFirstChild(name);if n and n:IsA("GuiObject") then n.Visible=false end end
         self.count=card:FindFirstChild("Count",true)
         local function listen(signal: RBXScriptSignal,callback: any) table.insert(self.connections,signal:Connect(callback)) end
-        listen(card.Leave.Activated,function() if context.facade then context.facade.leaveLobby() end end)
+        -- UI audit R8: the ✕ is ~10 px on an A06; its finger zone answers too (HitZone; author-pf3-hit-zones)
+        listen(require(script.Parent.HitZone).signal(card.Leave),function() if context.facade then context.facade.leaveLobby() end end)
         listen(game:GetService("RunService").Heartbeat,function() self:tick() end)
         local menu=if root.Parent and root.Parent.Name=="AtlasMenu" then root.Parent else root.Parent and root.Parent:FindFirstChild("AtlasMenu")
         self.menu=menu
@@ -97,7 +100,7 @@ function Dock.new(root: Frame,context: any): any
     end
     local function listen(signal: RBXScriptSignal,callback: any) table.insert(self.connections,signal:Connect(callback)) end
     -- v8: a collapsed (pill) dock's ✕ collapses the card again; elsewhere it leaves the queue
-    listen(card.Leave.Activated,function()
+    listen(require(script.Parent.HitZone).signal(card.Leave),function()
         if self.compact and self.expanded and not self.last then self.expanded=false;self:refreshMode();return end
         if context.facade then context.facade.leaveLobby() end
     end)
@@ -222,6 +225,12 @@ end
 -- Chunky seat tiles up to 8 (lit = taken), a slim meter past that.
 function Dock:paintSeats(playing: number,capacity: number)
     local card=self.card
+    -- build-out motion (queue.seats): the seat a new player just took pops (1.25 -> 1, Back .2 s); needs the template's
+    -- PFMotionScale (author-pf3-build-lobby), since the seats row is a list
+    local before=self.lastPlaying;self.lastPlaying=playing
+    if Motion and type(before)=="number" and playing>before then
+        task.defer(function() local s=self.seats[playing];if s and s.Visible then Motion.pop(s,1.25,.2) end end)
+    end
     if self.tray then
         -- the tray: pips (the host's gold, the joined blue, the open grey) up to 8, the slim meter past that; n / m stays
         local tiles=capacity>0 and capacity<=TILE_MAX
@@ -282,7 +291,8 @@ function Dock:tickNumber()
             Dock.setRing(ring,if remaining then remaining/LAST else 1,T.gold)
         else
             card.Eyebrow.Text="IN QUEUE"
-            ring.Number.Text=if remaining then clock(remaining) else "--:--"
+            -- UI audit (PF - 3, 2026-10-28): before a room's start timer runs, the ring shows its seats, not a "--:--" placeholder
+            ring.Number.Text=if remaining then clock(remaining) elseif capacity>0 then playing.."/"..capacity else tostring(playing)
             -- the ring drains with the wait: its share left of the longest seen for this start time
             local key=tostring(target)
             if remaining and (self.spanKey~=key or remaining>(self.span or 0)) then self.span=math.max(remaining,1);self.spanKey=key end
@@ -314,9 +324,9 @@ function Dock:tickNumber()
         end
     else
         card.Eyebrow.Text="IN QUEUE";card.Eyebrow.TextColor3=C.eye
-        card.Number.Text=if remaining then clock(remaining) else "--:--"
+        card.Number.Text=if remaining then clock(remaining) elseif capacity>0 then playing.."/"..capacity else tostring(playing)
     end
-    if self.pill then self.pill.Number.Text=if remaining then clock(remaining) else "--:--" end
+    if self.pill then self.pill.Number.Text=if remaining then clock(remaining) elseif capacity>0 then playing.."/"..capacity else tostring(playing) end
 end
 -- The last 5 s turn the card cobalt: the rim, a tint, the big number in place of the timer and seats.
 function Dock:setLast(on: boolean)
@@ -387,7 +397,16 @@ function Dock:refreshVisible()
     local menu,modal=self.menu,self.modal
     local play=self.playPage
     local onCard=play~=nil and play.Visible and play:GetAttribute("PFQueuedOnCard")==true -- the card's key carries it (Match found covers the 3-2-1)
-    local up=self.shown and (menu==nil or menu==self.root.Parent or menu.Visible) and not (modal and modal.Visible) and not onCard
+    -- (the Play page's dialog only covers the dock while that page shows: behind PF044's main screen it stays hidden)
+    local up=self.shown and (menu==nil or menu==self.root.Parent or menu.Visible) and not (modal and modal.Visible and play~=nil and play.Visible) and not onCard
+    -- build-out motion (queue.dock): the dock pops in from its corner (.94 -> 1, Back .2 s) and closes in .1 s
+    if Motion and self.tray and up~=self.dockUp then
+        self.dockUp=up
+        if up then self.root.Visible=true;Motion.open(self.card)
+        else Motion.close(self.card,nil,function() if not self.dockUp then self.root.Visible=false;self.card.Visible=true end end) end
+        return
+    end
+    self.dockUp=up
     if self.root.Visible~=up then self.root.Visible=up end
 end
 function Dock:tick()

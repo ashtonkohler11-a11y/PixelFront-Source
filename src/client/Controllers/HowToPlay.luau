@@ -13,6 +13,8 @@ local M={}
 M.DESK_HEIGHT=900
 local GOLD,MUTED,DIM=Color3.fromHex("#ffd77a"),Color3.fromHex("#9aa3b5"),Color3.fromHex("#3a3f4a")
 local ACTION="PFHowToClose"
+-- UI audit build-out 2026-10-28: the shared motion kit (PF - 4's UiMotion); nil where it can't load (test fakes)
+local Motion: any=(function() local ok,mod=pcall(function() return require(script.Parent.UiMotion) end);return if ok and type(mod)=="table" and type(mod.tween)=="function" then mod else nil end)()
 local root: any=nil
 local bound=false
 local tab="Ideas"
@@ -67,6 +69,18 @@ local function paintTabs(phone: any)
         if touch then touch.Visible=not mouse() end
     end
 end
+-- the Basics lines speak to your input (UI audit 2026-10-28: they said "Tap" on desk): the authored "Tap ..." on touch,
+-- "Click ..." with a mouse, "Select ..." with a gamepad (the authored words kept in PFTouchText)
+local function wordsForInput(node: any)
+    if not node or type(node.GetDescendants)~="function" then return end
+    local verb=if mouse() then "Click " elseif gamepad() then "Select " else "Tap "
+    for _,d in node:GetDescendants() do
+        if not d:IsA("TextLabel") then continue end
+        local base=d:GetAttribute("PFTouchText")
+        if base==nil and string.sub(d.Text,1,4)=="Tap " then base=d.Text;d:SetAttribute("PFTouchText",base) end
+        if type(base)=="string" then local t=verb..string.sub(base,5);if d.Text~=t then d.Text=t end end
+    end
+end
 -- the dot under the card nearest the window's left edge
 local function paintDots(phone: any)
     local scroll,dots=find(phone,"Ideas"),find(phone,"Dots")
@@ -86,15 +100,25 @@ end
 -- PF - 3 v2 (UI review, Ashton "Good, build it"; tools/atlas/author-pf3-howto-v2.luau): PFHowToV2 is one pure-scale page for
 -- every screen (Basics | Controls); while it exists the Desk / Phone views stay hidden.
 local function v2(): any return find(root,"PFHowToV2") end
+-- PF - 1 v3 frame (Ashton: "how to play should be a frame", then "Ship it" to the safe-area card; author-pf1-howto-frame):
+-- the page sits in a centred card below Roblox's topbar line (PFSafe.Fit.Card: the title, the tabs, the canvas, the Daily
+-- modal's ×); the Scrim behind it closes on a tap. Without the card the page is the full-screen v2.
+local function card(layer: any): any return find(find(find(layer,"PFSafe"),"Fit"),"Card") end
+local function host(layer: any): any return card(layer) or layer end
 local function paintV2(layer: any)
-    local tabs=find(layer,"Tabs")
+    local tabs=find(host(layer),"Tabs")
     for _,name in {"Basics","Controls"} do
         local b=find(tabs,name)
-        if b then local on=(name=="Basics")==(tab=="Ideas");b.BackgroundTransparency=if on then 0 else 1;b.TextColor3=if on then Color3.new(1,1,1) else MUTED end
+        if b then
+            local on=(name=="Basics")==(tab=="Ideas")
+            local goal={BackgroundTransparency=if on then 0 else 1,TextColor3=if on then Color3.new(1,1,1) else MUTED}
+            -- the pills cross over in .15 s (a sheet opening lands at once: its own pop carries it)
+            if Motion and root and root.Visible then Motion.tween(b,goal,.15) else b.BackgroundTransparency=goal.BackgroundTransparency;b.TextColor3=goal.TextColor3 end
+        end
     end
-    local canvas=find(layer,"Canvas")
+    local canvas=find(host(layer),"Canvas")
     local basics,ctl=find(canvas,"Basics"),find(canvas,"Controls")
-    if basics then basics.Visible=tab=="Ideas" end
+    if basics then basics.Visible=tab=="Ideas";wordsForInput(basics) end
     if ctl then
         ctl.Visible=tab=="Controls"
         local keys,touch=find(ctl,"Keys"),find(ctl,"Touch")
@@ -110,7 +134,9 @@ function M.setTab(name: string)
 end
 function M.close()
     if not root then return end
-    root.Visible=false
+    -- the card shrinks away (.1 s, UiMotion) before the sheet hides; without the kit it hides at once
+    local layer=v2();local c=layer and card(layer)
+    if Motion and c and root.Visible then local r=root;Motion.close(c,nil,function() r.Visible=false;c.Visible=true end) else root.Visible=false end
     pcall(function() ContextActionService:UnbindAction(ACTION) end)
     if GuiService.SelectedObject and GuiService.SelectedObject:IsDescendantOf(root) then GuiService.SelectedObject=nil end
 end
@@ -131,12 +157,21 @@ local function bind()
     if layer then
         local back=find(find(find(layer,"Top"),"Back"),"PFHit") or find(find(layer,"Top"),"Back")
         if back then back.Activated:Connect(M.close) end
-        local tabs2=find(layer,"Tabs")
-        for _,name in {"Basics","Controls"} do local b=find(tabs2,name);if b then b.Activated:Connect(function(input) M.setTab(name);if tapped(input) then dropSelection(true) end end) end end
-        -- clear of Roblox's pill (the one sanctioned runtime position)
-        local ok,Line=pcall(function() return require(script.Parent.TopbarLine) end)
-        local connections={}
-        if ok and Line then Line.keepRight(find(layer,"Top"),connections);Line.clearBelow(find(layer,"Canvas"),connections) end
+        local x=find(card(layer),"Close");x=find(x,"Hit") or x
+        if x then x.Activated:Connect(M.close) end
+        local tabs2=find(host(layer),"Tabs")
+        -- UI audit R8: the tabs answer on their finger zones too (HitZone; author-pf3-hit-zones)
+        local okZone,HitZone=pcall(function() return require((script :: any).Parent.HitZone) end)
+        for _,name in {"Basics","Controls"} do local b=find(tabs2,name);if b then
+            local tap=if okZone and type(HitZone)=="table" and type(HitZone.signal)=="function" then HitZone.signal(b) else b.Activated
+            tap:Connect(function(input) M.setTab(name);if tapped(input) then dropSelection(true) end end)
+        end end
+        -- the full-screen page only: clear of Roblox's pill (the one sanctioned runtime position); the card is authored there
+        if not card(layer) then
+            local ok,Line=pcall(function() return require(script.Parent.TopbarLine) end)
+            local connections={}
+            if ok and Line then Line.keepRight(find(layer,"Top"),connections);Line.clearBelow(find(layer,"Canvas"),connections) end
+        end
     end
     UserInputService:GetPropertyChangedSignal("PreferredInput"):Connect(function()
         if not M.isOpen() then return end
@@ -148,6 +183,7 @@ end
 function M.open(gui: Instance?): boolean
     if not M.locate(gui) then return false end
     bind()
+    pcall(function() require(script.Parent.StatsReport).open("HowToPlay") end) -- STATS v3: a UI open
     root.Visible=true
     local layer=v2()
     local v,tall=view()
@@ -155,7 +191,8 @@ function M.open(gui: Instance?): boolean
     for _,name in {"Desk","Phone"} do local x=find(root,name);if x then x.Visible=x==v end end
     if layer then
         tab="Ideas";paintV2(layer)
-        local back=find(find(layer,"Top"),"Back")
+        local c=card(layer);if Motion and c then Motion.open(c) end -- the card pops .94 -> 1 from its centre
+        local back=find(card(layer),"Close") or find(find(layer,"Top"),"Back")
         if gamepad() and back then GuiService.SelectedObject=back end
     elseif not tall and v then
         tab="Ideas";paintTabs(v)

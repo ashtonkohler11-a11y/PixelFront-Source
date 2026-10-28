@@ -23,7 +23,7 @@ return {
     ["events_display.focus"] = "Focus",
     ["events_display.hydrogen_bomb_detonated"] = "{name} - hydrogen bomb detonated",
     ["events_display.ignore"] = "Ignore",
-    ["events_display.missile_intercepted"] = "SAM intercepted {unit}",
+    ["events_display.missile_intercepted"] = "SAM Launcher intercepted {unit}",
     ["events_display.no_boats_available"] = "No boats available, max {max}",
     ["events_display.received_gold_from_captured_ship"] = "Received {gold} gold from ship captured from {name}",
     ["events_display.received_gold_from_conquest"] = "Conquered {name}, received {gold} gold",
