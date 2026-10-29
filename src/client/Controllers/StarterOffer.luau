@@ -128,7 +128,15 @@ function M.start()
             known=true;have=M.owned(n.pack,packet.arsenal.owned);ownedNow=packet.arsenal.owned;renumber()
         end
     end)
-    remotes.CosmeticsCommand:FireServer({kind="Ready"})
+    -- one Ready can go unanswered (asked before the server made the profile, or dropped by its command rate limit): until a
+    -- packet with arsenal.owned arrives the boxes stay hidden, so ask again every 2 s (Ashton's live test 2026-10-28: all hidden)
+    task.spawn(function()
+        for _=1,30 do
+            if known then return end
+            remotes.CosmeticsCommand:FireServer({kind="Ready"})
+            task.wait(2)
+        end
+    end)
     -- Roblox's own prices for the pack and its items (the catalog's numbers stand in until they answer, or if they fail)
     task.spawn(function()
         local ids={n.pack.productId}

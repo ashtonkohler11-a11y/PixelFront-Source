@@ -228,9 +228,21 @@ function Page:select(i: number,dir: number?)
         Motion.tween(glow,{Position=G,ImageTransparency=gt},.18,Enum.EasingStyle.Quart)
     end)
 end
+-- Ashton 2026-10-28 ("left right cycle ... just jumps around"): ‹ › step to the rail card beside the shown one ON SCREEN
+-- (the rail groups Warfare then Industry in its own order, not the catalog's), wrapping at the ends
+function Page:railOrder(): {number}
+    local order={}
+    for i,item in self.cat.items do table.insert(order,{i=i,card=self.root.Rail:FindFirstChild(item.id,true)}) end
+    table.sort(order,function(a,b)
+        local ax=if a.card then a.card.AbsolutePosition.X else math.huge;local bx=if b.card then b.card.AbsolutePosition.X else math.huge
+        if ax~=bx then return ax<bx end;return a.i<b.i
+    end)
+    local out={};for _,o in order do table.insert(out,o.i) end;return out
+end
 function Page:step(d: number)
     if not self.cat then return end
-    local n=#self.cat.items;self:select((self.index-1+d)%n+1,d)
+    local order=self:railOrder();local at=table.find(order,self.index) or 1
+    self:select(order[(at-1+(if d<0 then -1 else 1))%#order+1],d)
     -- the chevron nudges 3 px its way and back (.14 s)
     local key=if d<0 then self.root.Stage.Nav.Prev else self.root.Stage.Nav.Next
     local glyph=key:FindFirstChild("Glyph")

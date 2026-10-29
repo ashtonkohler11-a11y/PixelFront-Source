@@ -90,16 +90,17 @@ Catalog.currencyPacks = {
 -- Permanent pack ownership and one-time currency credit share the existing record.
 -- Aurora Pass 2006061304 verified on 2026-10-04 in Universe 10768350308.
 -- The client still requires a current Marketplace sale flag and actual price.
-Catalog.premiumPacks = {{id="pack_aurora", name="Aurora Pack", category="PremiumPack", passId=2006061304, targetRobux=399, amount=10000, art="aurora-pack",
+Catalog.premiumPacks = {{id="pack_aurora", name="Aurora Pack", category="PremiumPack", passId=2006061304, targetRobux=119, amount=30000, art="aurora-pack",
     items={"vfx_aurora","flag_aurora","crown_aurora","banner_aurora","frame_aurora","buildings_aurora","skin_aurora"},
-    description="Aurora effect, flag, crown, profile banner, frame, original-building overlay and territory skin. Includes 10,000 Cobalt."},
-    -- Starter Pass 2004933335 verified 2026-10-05 ("Starter Pack", 48 R$, for sale, same group as Aurora).
+    description="Aurora effect, flag, crown, profile banner, frame, original-building overlay and territory skin. Includes 30,000 Cobalt."},
+    -- 2026-10-28 (Ashton via MM): Forge R$ 59 + 15,000 Cobalt, Aurora R$ 119 + 30,000 Cobalt (Ashton sets the pass prices).
+    -- Starter Pass 2004933335 verified 2026-10-05 ("Starter Pack", for sale, same group as Aurora).
     -- 2026-10-28 (Ashton via MM): renamed "Forge Pack": "Starter Pack" is the Armory's Bank + Artillery pack now. The id stays
     -- (owners, receipts); the Game Pass's own name on Roblox is renamed by Ashton (RELEASE-CHECKLIST).
     -- targetRobux is setup guidance only; the client shows the live Marketplace price.
-    {id="pack_starter", name="Forge Pack", category="PremiumPack", passId=2004933335, targetRobux=49, amount=3000, art="forge-starter-pack",
+    {id="pack_starter", name="Forge Pack", category="PremiumPack", passId=2004933335, targetRobux=59, amount=15000, art="forge-starter-pack",
         items={"skin_forge","flag_forge","frame_forge","buildings_forge"},
-        description="Forge territory skin, flag, profile frame and original-building overlay. Includes 3,000 Cobalt once."}}
+        description="Forge territory skin, flag, profile frame and original-building overlay. Includes 15,000 Cobalt."}}
 Catalog.premiumById = {}; for _,pack in Catalog.premiumPacks do Catalog.premiumById[pack.id]=pack end
 -- PIVOT Glacier: packs that are earned, not bought (no pass): the daily grants every item of the pack on its day; the
 -- shop shows the pack card and its key opens the Daily reward. Its items are packOnly.

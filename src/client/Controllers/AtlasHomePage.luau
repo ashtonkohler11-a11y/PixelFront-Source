@@ -546,32 +546,45 @@ function Home:updateCommerce(state: any)
     self.ownedCosmetics=if profile.loaded and type(profile.owned)=="table" then profile.owned else nil
     self:paintCobalt()
 end
--- build-out ("the you-can-buy dot", Ashton): the cheapest Shop item you don't own yet and can pay for in Cobalt lights the dot
--- on Home's Shop card (PFBuyDot, author-pf3-build-home); bundles, pack-only and pass-only items don't count
-function Home:canBuy(): boolean
+-- the "you can buy" badge (Ashton 2026-10-28: "notif is lame should be top left and not a green dot"): how many Shop items you
+-- don't own yet your Cobalt covers, on the red pill at the Shop card's top-left corner (PFBuyBadge, author-pf3-build-out);
+-- bundles, pack-only and pass-only items don't count
+function Home:buyCount(): number
     local balance,owned=self.balance,self.ownedCosmetics
-    if not balance or not owned then return false end
+    if not balance or not owned then return 0 end
     local ok,Catalog=pcall(function() return require(ReplicatedStorage.Shared.CosmeticCatalog) end)
-    if not ok or type(Catalog)~="table" or type(Catalog.items)~="table" then return false end
+    if not ok or type(Catalog)~="table" or type(Catalog.items)~="table" then return 0 end
+    local n=0
     for _,item in Catalog.items do
         if type(item.price)=="number" and item.price>0 and item.price<=balance and not item.packOnly and not item.passOnly
-            and item.category~="Bundle" and owned[item.id]~=true then return true end
+            and item.category~="Bundle" and owned[item.id]~=true then n+=1 end
     end
-    return false
+    return n
+end
+-- shown, the count pops in (.6 -> 1, Back .25 s) when it first appears or changes, then pulses gently every 3 s; hidden at 0
+function Home:paintBadge(badge: GuiObject,count: number)
+    local label=badge:FindFirstChild("Count")
+    local text=if count>9 then "9+" else tostring(count)
+    local was=badge.Visible and badge:GetAttribute("PFBadgeCount")
+    badge.Visible=count>0;badge:SetAttribute("PFBadgeCount",count)
+    if label and label:IsA("TextLabel") then label.Text=text end
+    if not Motion then return end
+    self.badgePulse=self.badgePulse or {}
+    if count>0 and was~=count then Motion.pop(badge,.6,.25) end
+    if count>0 and not self.badgePulse[badge] then
+        self.badgePulse[badge]=Motion.every(badge,3,function(node) Motion.tick(node,1.08,.35) end)
+    elseif count==0 and self.badgePulse[badge] then self.badgePulse[badge]();self.badgePulse[badge]=nil end
 end
 function Home:paintCobalt()
-    local can=self:canBuy()
+    local count=self:buyCount()
     for _,layout in self.layouts do
         local amount=layout and find(layout,"Amount")
         -- build-out: a payout counts up (.6 s) instead of snapping
         if amount then
             if self.balance and Motion then Motion.count(amount,self.balance) else amount.Text=if self.balance then commas(self.balance) else "…" end
         end
-        local dot=layout and find(layout,"PFBuyDot")
-        if dot then
-            local was=dot.Visible;dot.Visible=can
-            if can and not was and Motion then Motion.pop(dot,1.4,.25) end
-        end
+        local badge=layout and find(layout,"PFBuyBadge")
+        if badge then self:paintBadge(badge,count) end
     end
 end
 -- PF - 5: the Armory tile shows only while the menu provides context.openArmory (PF - 1's page): owned count + pips

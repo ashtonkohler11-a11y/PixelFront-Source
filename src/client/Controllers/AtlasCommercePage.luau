@@ -289,8 +289,8 @@ function Page.new(pageRoot: Frame,context: any): any
             onAdd=function() if self.visible and self.page=="Shop" then self:selectCategory("Shop","Currency") end end,
             onCycle=function(direction: number)
                 if not self.visible or self.page~="Shop" then return end
-                local list=SHOP_CATEGORIES;local index=table.find(list,self.shopCategory) or 1
-                local nextName=list[(index-1+direction)%#list+1];self:selectCategory("Shop",nextName)
+                local nextName=Page.neighbour(categoriesOf(self.shop),self.shopCategory,direction);if not nextName then return end
+                self:selectCategory("Shop",nextName)
                 if Input.PreferredInput==Enum.PreferredInput.Gamepad then Gui.SelectedObject=categoriesOf(self.shop)[nextName] end
             end})
     end
@@ -299,8 +299,8 @@ function Page.new(pageRoot: Frame,context: any): any
         self.invBar=TopBar.new(headerOf(self.inventory),{tabs=categoriesOf(self.inventory),reduced=context.reducedMotion,
             onCycle=function(direction: number)
                 if not self.visible or self.page~="Inventory" then return end
-                local list=Commerce.inventoryCategories;local index=table.find(list,self.inventoryCategory) or 1
-                local nextName=list[(index-1+direction)%#list+1];self:selectCategory("Inventory",nextName)
+                local nextName=Page.neighbour(categoriesOf(self.inventory),self.inventoryCategory,direction);if not nextName then return end
+                self:selectCategory("Inventory",nextName)
                 if Input.PreferredInput==Enum.PreferredInput.Gamepad then Gui.SelectedObject=categoriesOf(self.inventory)[nextName] end
             end})
     end
@@ -401,6 +401,25 @@ function Page.new(pageRoot: Frame,context: any): any
     end)
     self:update(if context.getCommerceState then context.getCommerceState() else {})
     return self
+end
+-- a Shop card's sort key (Ashton 2026-10-28: "smallest to biggest cobalt price"): an earned-pack item -1, a free one 0, a Cobalt
+-- price itself, pack-only after every priced one, VIP / pass-only last
+function Page.priceKey(item: any,earned: boolean): number
+    if earned then return -1 end
+    if item.passOnly then return math.huge end
+    if item.packOnly then return 1e12 end
+    local p=tonumber(if item.category=="Bundle" then (Catalog.bundlePrice and Catalog.bundlePrice(item,{})) or item.price else item.price) or 0
+    return if p>0 then p else 0
+end
+-- Ashton 2026-10-28 ("left right cycle in the shop is weird it just jumps around"): a cycle steps to the visible tab beside the
+-- current one ON SCREEN (LayoutOrder, then x), skipping hidden tabs, wrapping at the ends; never a list order the bar may not follow
+function Page.neighbour(tabs: Instance,current: string,direction: number): string?
+    local list={}
+    for _,b in tabs:GetChildren() do if b:IsA("GuiButton") and b.Visible then table.insert(list,b) end end
+    table.sort(list,function(a,b) if a.LayoutOrder~=b.LayoutOrder then return a.LayoutOrder<b.LayoutOrder end return a.AbsolutePosition.X<b.AbsolutePosition.X end)
+    if #list==0 then return nil end
+    local at=1;for i,b in list do if b.Name==current then at=i end end
+    return list[(at-1+(if direction<0 then -1 else 1))%#list+1].Name
 end
 function Page:selectCategory(scope: string,name: string)
     if scope=="Shop" then self.shopCategory=name;self.enterCards=true else self.inventoryCategory=name;self.selectedId=nil end
@@ -766,6 +785,19 @@ function Page:refreshCurrency()
     end
     self:bindPurchase(self.shop.Scroll.Offers.Pro,Catalog.premiumPacks[1])
     self:bindPurchase(self.shop.Scroll.Offers.Starter,Catalog.premiumById.pack_starter or {id="pending_Starter",category="Offer",pending=true})
+    -- the packs' included Cobalt comes from the catalog (2026-10-28: Forge 15,000, Aurora 30,000), never the authored text
+    local function says(node: Instance?,text: string) if node and node:IsA("TextLabel") then node.Text=text end end
+    local offers=self.shop.Scroll.Offers
+    for _,o in {{offers:FindFirstChild("Pro"),"Aurora",Catalog.premiumById.pack_aurora},{offers:FindFirstChild("Starter"),"Forge",Catalog.premiumById.pack_starter}} do
+        local card,scene,pack=o[1],o[1] and o[1]:FindFirstChild(o[2]),o[3]
+        if card and pack then
+            local front=scene and (scene:FindFirstChild("Front") or scene)
+            local chip=front and front:FindFirstChild("Cobalt");chip=chip and chip:FindFirstChild("Chip")
+            says(chip and chip:FindFirstChild("Amount"),"+"..number(pack.amount))
+            local bonus=scene and scene:FindFirstChild("Bonus");says(bonus and bonus:FindFirstChild("Amount"),number(pack.amount).." Cobalt")
+            if o[2]=="Aurora" then says(card:FindFirstChild("Description"),"7 Aurora cosmetics + "..number(pack.amount).." Cobalt") end
+        end
+    end
 end
 -- PF020 G6 (PF - 2): what an owned pass card says and does (the mockup's owned face: "Owned", the
 -- line, and the card's action on a cobalt key).
@@ -856,7 +888,7 @@ function Page:refreshPasses()
         card.Active=false;card.Selectable=false;card.AutoButtonColor=false
     end
     local pack=Catalog.premiumPacks[1];local card=cards.Aurora
-    card.Title.Text=pack.name;card.Kind.Text="Permanent pass";card.Description.Text="7 cosmetics + 10,000 Cobalt once"
+    card.Title.Text=pack.name;card.Kind.Text="Permanent pass";card.Description.Text="7 cosmetics + "..number(pack.amount).." Cobalt once"
     Art.bindPremium(card,pack.art);self:bindPurchase(card,pack)
     card.Active=false;card.Selectable=false;card.AutoButtonColor=false
 end
@@ -935,9 +967,13 @@ function Page:refreshRows()
         if inventory then for _,levelItem in Catalog.levelItems or {} do if owned(self)[levelItem.id] then table.insert(entries,levelItem) end end end
         if not inventory then
             -- earned-pack items first: the card order (LayoutOrder=count) puts them at the head of each row / tab
-            local first,rest={},{}
-            for _,entry in entries do table.insert(if earnedOf(entry) then first else rest,entry) end
-            table.move(rest,1,#rest,#first+1,first);entries=first
+            -- Ashton 2026-10-28 ("packs/daily first, then smallest to biggest cobalt price"): then the free ones, then by Cobalt
+            -- price, cheapest first; pack-only and VIP-only items (no Cobalt price) last. Ties keep the catalog order.
+            local at={};for i,e in entries do at[e]=i end
+            table.sort(entries,function(a,b)
+                local ka,kb=Page.priceKey(a,earnedOf(a)~=nil),Page.priceKey(b,earnedOf(b)~=nil)
+                if ka~=kb then return ka<kb end;return at[a]<at[b]
+            end)
         end
         local count=0
         for _,item in entries do
@@ -1068,6 +1104,25 @@ function Page:refreshRows()
             end
             table.insert(self.rowConnections,focus.SelectionGained:Connect(focusStroke))
             table.insert(self.rowConnections,focus.SelectionLost:Connect(focusStroke))
+        end
+        -- Ashton 2026-10-28: Discover's rows go cheapest-row first (a row's cheapest Cobalt price; a row with none after), then the
+        -- Robux-only sections (Cobalt packs, Passes / VIP) after every Cobalt row. The daily row, Starter box and packs keep their
+        -- authored places at the top (lower LayoutOrders); the scroll's end spacer stays last.
+        if discover then
+            local order={}
+            for id,section in self.sections do
+                local cheapest=math.huge
+                for _,c in section.Scroll:GetChildren() do
+                    local it=c:IsA("GuiButton") and Catalog.byId[c.Name];local p=it and tonumber(it.price)
+                    if p and p>0 and not it.passOnly and not it.packOnly then cheapest=math.min(cheapest,p) end
+                end
+                table.insert(order,{section=section,cheapest=cheapest,base=section.LayoutOrder})
+            end
+            table.sort(order,function(a,b) if a.cheapest~=b.cheapest then return a.cheapest<b.cheapest end;return a.base<b.base end)
+            for i,o in order do o.section.LayoutOrder=50+i end
+            for i,name in {"Currency","PFPassesVip","PFPassesCards","Passes"} do
+                local node=ui.Scroll:FindFirstChild(name);if node and node:IsA("GuiObject") then node.LayoutOrder=200+i end
+            end
         end
         -- the Discover rows (author-pf1-discover-rows): each Head counts its cards; PFFade shows while more is off to the right
         if discover then
